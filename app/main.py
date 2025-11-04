@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -101,6 +101,76 @@ def create_contact(
     )
 
 
+@app.get("/contacts/{contact_id}/edit")
+def edit_contact_form(contact_id: int, request: Request, db: Session = Depends(get_db)):
+    contact = _ensure_contact_exists(contact_id, db)
+    return templates.TemplateResponse(
+        "contact_edit_form.html",
+        {
+            "request": request,
+            "contact": contact,
+            "errors": [],
+            "form_data": None,
+        },
+    )
+
+
+@app.post("/contacts/{contact_id}/edit")
+def update_contact(
+    contact_id: int,
+    request: Request,
+    name: str = Form(...),
+    company_name: str = Form(...),
+    role: str = Form(...),
+    email: str = Form(...),
+    linkedin_url: Optional[str] = Form(None),
+    website_url: Optional[str] = Form(None),
+    source: str = Form(...),
+    status: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    contact = _ensure_contact_exists(contact_id, db)
+    contact.name = name
+    contact.company_name = company_name
+    contact.role = role
+    contact.email = email
+    contact.linkedin_url = linkedin_url
+    contact.website_url = website_url
+    contact.source = source
+    contact.status = status
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        contact = _ensure_contact_exists(contact_id, db)
+        return templates.TemplateResponse(
+            "contact_edit_form.html",
+            {
+                "request": request,
+                "contact": contact,
+                "errors": ["A contact with that email already exists."],
+                "form_data": {
+                    "name": name,
+                    "company_name": company_name,
+                    "role": role,
+                    "email": email,
+                    "linkedin_url": linkedin_url,
+                    "website_url": website_url,
+                    "source": source,
+                    "status": status,
+                },
+            },
+            status_code=400,
+        )
+
+    db.refresh(contact)
+    return RedirectResponse(
+        url=request.url_for("get_contact_detail", contact_id=contact.id),
+        status_code=303,
+    )
+
+
 def _get_contact_or_404(contact_id: int, db: Session) -> models.Contact:
     contact = (
         db.query(models.Contact)
@@ -131,9 +201,15 @@ def get_contact_detail(contact_id: int, request: Request, db: Session = Depends(
 @app.get("/contacts/{contact_id}/interactions/new")
 def new_interaction_form(contact_id: int, request: Request, db: Session = Depends(get_db)):
     contact = _get_contact_or_404(contact_id, db)
+    default_due = (date.today() + timedelta(days=7)).isoformat()
     return templates.TemplateResponse(
         "interaction_form.html",
-        {"request": request, "contact": contact, "errors": [], "form_data": None},
+        {
+            "request": request,
+            "contact": contact,
+            "errors": [],
+            "form_data": {"next_action_due": default_due},
+        },
     )
 
 
@@ -182,6 +258,24 @@ def create_interaction(
 
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact.id),
+        status_code=303,
+    )
+
+
+@app.post("/interactions/{interaction_id}/delete")
+def delete_interaction(interaction_id: int, request: Request, db: Session = Depends(get_db)):
+    interaction = (
+        db.query(models.Interaction)
+        .filter(models.Interaction.id == interaction_id)
+        .first()
+    )
+    if not interaction:
+        raise HTTPException(status_code=404, detail="Interaction not found")
+    contact_id = interaction.contact_id
+    db.delete(interaction)
+    db.commit()
+    return RedirectResponse(
+        url=request.url_for("get_contact_detail", contact_id=contact_id),
         status_code=303,
     )
 
@@ -235,6 +329,24 @@ def create_note(
 
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact.id),
+        status_code=303,
+    )
+
+
+@app.post("/notes/{note_id}/delete")
+def delete_note(note_id: int, request: Request, db: Session = Depends(get_db)):
+    note = (
+        db.query(models.Note)
+        .filter(models.Note.id == note_id)
+        .first()
+    )
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    contact_id = note.contact_id
+    db.delete(note)
+    db.commit()
+    return RedirectResponse(
+        url=request.url_for("get_contact_detail", contact_id=contact_id),
         status_code=303,
     )
 

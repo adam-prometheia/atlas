@@ -4,6 +4,7 @@
 <div class="section-header">
     <h1>{{ contact.name }}</h1>
     <div>
+        <a class="button secondary" href="/contacts/{{ contact.id }}/edit">Edit Contact</a>
         <a class="button" href="/contacts/{{ contact.id }}/interactions/new">Log Interaction</a>
         <a class="button" href="/contacts/{{ contact.id }}/notes/new">Add Note</a>
     </div>
@@ -43,6 +44,7 @@
             <th>Summary</th>
             <th>Next Action</th>
             <th>Due</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -53,6 +55,11 @@
             <td>{{ interaction.summary }}</td>
             <td>{{ interaction.next_action or "-" }}</td>
             <td>{{ interaction.next_action_due.strftime("%Y-%m-%d") if interaction.next_action_due else "-" }}</td>
+            <td>
+                <form method="post" action="/interactions/{{ interaction.id }}/delete">
+                    <button type="submit" class="button secondary">Delete</button>
+                </form>
+            </td>
         </tr>
     {% endfor %}
     </tbody>
@@ -72,14 +79,20 @@
             <th>Date</th>
             <th>Raw Notes</th>
             <th>Processed Summary</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
     {% for note in contact.notes %}
         <tr>
             <td>{{ note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else "-" }}</td>
-            <td>{{ note.raw_notes }}</td>
+            <td><div class="preformatted">{{ note.raw_notes }}</div></td>
             <td>{{ note.processed_summary or "-" }}</td>
+            <td>
+                <form method="post" action="/notes/{{ note.id }}/delete">
+                    <button type="submit" class="button secondary">Delete</button>
+                </form>
+            </td>
         </tr>
     {% endfor %}
     </tbody>

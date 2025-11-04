@@ -1,0 +1,54 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<h1>Edit Contact</h1>
+{% if errors %}
+    <div class="errors">
+        <ul>
+            {% for error in errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+<form method="post" action="/contacts/{{ contact.id }}/edit">
+    <label for="name">Name</label>
+    <input type="text" id="name" name="name" value="{{ form_data.name if form_data else contact.name }}" required>
+
+    <label for="company_name">Company</label>
+    <input type="text" id="company_name" name="company_name" value="{{ form_data.company_name if form_data else contact.company_name }}" required>
+
+    <label for="role">Role</label>
+    <input type="text" id="role" name="role" value="{{ form_data.role if form_data else contact.role }}" required>
+
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" value="{{ form_data.email if form_data else contact.email }}" required>
+
+    <label for="linkedin_url">LinkedIn URL</label>
+    <input type="text" id="linkedin_url" name="linkedin_url" value="{{ form_data.linkedin_url if form_data else contact.linkedin_url or '' }}">
+
+    <label for="website_url">Website URL</label>
+    <input type="text" id="website_url" name="website_url" value="{{ form_data.website_url if form_data else contact.website_url or '' }}">
+
+    <label for="source">Source</label>
+    {% set selected_source = form_data.source if form_data else contact.source %}
+    <select id="source" name="source" required>
+        {% for option in ["referral", "cold_linkedin", "event", "other"] %}
+            <option value="{{ option }}" {% if option == selected_source %}selected{% endif %}>{{ option | replace("_", " ") | title }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="status">Status</label>
+    {% set selected_status = form_data.status if form_data else contact.status %}
+    <select id="status" name="status" required>
+        {% for option in ["prospect", "meeting_booked", "proposal_sent", "client"] %}
+            <option value="{{ option }}" {% if option == selected_status %}selected{% endif %}>{{ option | replace("_", " ") | title }}</option>
+        {% endfor %}
+    </select>
+
+    <div style="margin-top: 1.5rem;">
+        <input type="submit" value="Update Contact">
+        <a class="button secondary" href="/contacts/{{ contact.id }}">Cancel</a>
+    </div>
+</form>
+{% endblock %}

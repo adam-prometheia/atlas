@@ -9,7 +9,7 @@ from openai import OpenAI
 
 from . import models
 
-_MODEL_NAME = "gpt-4o-mini"
+_MODEL_NAME = "gpt-5-mini-2025-08-07"
 
 _MARCIN_EXAMPLE_EMAIL = """Subject: Exploring pragmatic AI pilots
 

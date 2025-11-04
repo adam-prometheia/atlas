@@ -29,7 +29,7 @@
     <textarea id="next_action" name="next_action" rows="3">{{ form_data.next_action if form_data else '' }}</textarea>
 
     <label for="next_action_due">Next Action Due</label>
-    <input type="date" id="next_action_due" name="next_action_due" value="{{ form_data.next_action_due if form_data else '' }}">
+    <input type="date" id="next_action_due" name="next_action_due" value="{{ form_data.next_action_due if form_data and form_data.next_action_due else '' }}">
 
     <div style="margin-top: 1.5rem;">
         <input type="submit" value="Save Interaction">
