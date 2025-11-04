@@ -1,0 +1,37 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="section-header">
+    <h1>Contacts</h1>
+    <a class="button" href="/contacts/new">Add Contact</a>
+</div>
+
+{% if contacts %}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Company</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>Source</th>
+            <th>Created</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for contact in contacts %}
+        <tr>
+            <td><a href="/contacts/{{ contact.id }}">{{ contact.name }}</a></td>
+            <td>{{ contact.company_name }}</td>
+            <td>{{ contact.role }}</td>
+            <td>{{ contact.status }}</td>
+            <td>{{ contact.source }}</td>
+            <td>{{ contact.created_at.strftime("%Y-%m-%d") if contact.created_at else "-" }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+    <p class="empty">No contacts yet. Add your first contact to get started.</p>
+{% endif %}
+{% endblock %}

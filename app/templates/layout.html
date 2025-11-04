@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ATLAS CRM</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f7f7f7; }
+        header { background: #1e3a8a; color: #fff; padding: 1rem 2rem; }
+        main { padding: 2rem; }
+        nav a { color: #fff; margin-right: 1rem; text-decoration: none; font-weight: bold; }
+        .container { background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { padding: 0.75rem; border-bottom: 1px solid #e5e7eb; text-align: left; }
+        th { background: #f3f4f6; }
+        a.button, button, input[type="submit"] { background: #2563eb; color: #fff; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+        a.button.secondary { background: #6b7280; }
+        form label { display: block; margin-top: 1rem; font-weight: bold; }
+        form input[type="text"], form input[type="email"], form input[type="date"], form textarea, form select { width: 100%; padding: 0.5rem; margin-top: 0.25rem; border: 1px solid #d1d5db; border-radius: 4px; }
+        .errors { background: #fee2e2; color: #991b1b; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem; }
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-top: 2rem; }
+        .empty { color: #6b7280; font-style: italic; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="/contacts">Contacts</a>
+            <a href="/next-actions">Next Actions</a>
+        </nav>
+    </header>
+    <main>
+        <div class="container">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+</body>
+</html>

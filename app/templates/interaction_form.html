@@ -1,0 +1,37 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<h1>Log Interaction for {{ contact.name }}</h1>
+{% if errors %}
+    <div class="errors">
+        <ul>
+            {% for error in errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+<form method="post" action="/contacts/{{ contact.id }}/interactions">
+    <label for="interaction_type">Interaction Type</label>
+    <select id="interaction_type" name="interaction_type" required>
+        {% set selected_type = form_data.interaction_type if form_data else '' %}
+        {% for option in ["email", "call", "meeting", "note"] %}
+            <option value="{{ option }}" {% if option == selected_type %}selected{% endif %}>{{ option | title }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="summary">Summary</label>
+    <textarea id="summary" name="summary" rows="4" required>{{ form_data.summary if form_data else '' }}</textarea>
+
+    <label for="next_action">Next Action</label>
+    <textarea id="next_action" name="next_action" rows="3">{{ form_data.next_action if form_data else '' }}</textarea>
+
+    <label for="next_action_due">Next Action Due</label>
+    <input type="date" id="next_action_due" name="next_action_due" value="{{ form_data.next_action_due if form_data else '' }}">
+
+    <div style="margin-top: 1.5rem;">
+        <input type="submit" value="Save Interaction">
+        <a class="button secondary" href="/contacts/{{ contact.id }}">Cancel</a>
+    </div>
+</form>
+{% endblock %}

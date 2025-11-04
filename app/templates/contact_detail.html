@@ -1,0 +1,80 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="section-header">
+    <h1>{{ contact.name }}</h1>
+    <div>
+        <a class="button" href="/contacts/{{ contact.id }}/interactions/new">Log Interaction</a>
+        <a class="button" href="/contacts/{{ contact.id }}/notes/new">Add Note</a>
+    </div>
+</div>
+
+<p><strong>Company:</strong> {{ contact.company_name }}</p>
+<p><strong>Role:</strong> {{ contact.role }}</p>
+<p><strong>Email:</strong> <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></p>
+{% if contact.linkedin_url %}
+<p><strong>LinkedIn:</strong> <a href="{{ contact.linkedin_url }}" target="_blank">{{ contact.linkedin_url }}</a></p>
+{% endif %}
+<p><strong>Source:</strong> {{ contact.source | replace("_", " ") | title }}</p>
+<p><strong>Status:</strong> {{ contact.status | replace("_", " ") | title }}</p>
+<p><strong>Created:</strong> {{ contact.created_at.strftime("%Y-%m-%d %H:%M") if contact.created_at else "-" }}</p>
+<p><strong>Updated:</strong> {{ contact.updated_at.strftime("%Y-%m-%d %H:%M") if contact.updated_at else "-" }}</p>
+
+<div class="section-header">
+    <h2>Interactions</h2>
+    <span></span>
+</div>
+{% if contact.interactions %}
+<table>
+    <thead>
+        <tr>
+            <th>When</th>
+            <th>Type</th>
+            <th>Summary</th>
+            <th>Next Action</th>
+            <th>Due</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for interaction in contact.interactions %}
+        <tr>
+            <td>{{ interaction.timestamp.strftime("%Y-%m-%d %H:%M") if interaction.timestamp else "-" }}</td>
+            <td>{{ interaction.type | replace("_", " ") | title }}</td>
+            <td>{{ interaction.summary }}</td>
+            <td>{{ interaction.next_action or "-" }}</td>
+            <td>{{ interaction.next_action_due.strftime("%Y-%m-%d") if interaction.next_action_due else "-" }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+    <p class="empty">No interactions logged yet.</p>
+{% endif %}
+
+<div class="section-header">
+    <h2>Notes</h2>
+    <span></span>
+</div>
+{% if contact.notes %}
+<table>
+    <thead>
+        <tr>
+            <th>Meeting Date</th>
+            <th>Raw Notes</th>
+            <th>Processed Summary</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for note in contact.notes %}
+        <tr>
+            <td>{{ note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else "-" }}</td>
+            <td>{{ note.raw_notes }}</td>
+            <td>{{ note.processed_summary or "-" }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+    <p class="empty">No notes recorded yet.</p>
+{% endif %}
+{% endblock %}

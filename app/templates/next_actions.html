@@ -1,0 +1,35 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="section-header">
+    <h1>Next Actions as of {{ today.strftime("%Y-%m-%d") }}</h1>
+    <span></span>
+</div>
+
+{% if interactions %}
+<table>
+    <thead>
+        <tr>
+            <th>Contact</th>
+            <th>Interaction Type</th>
+            <th>Summary</th>
+            <th>Next Action</th>
+            <th>Due Date</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for interaction in interactions %}
+        <tr>
+            <td><a href="/contacts/{{ interaction.contact.id }}">{{ interaction.contact.name }}</a></td>
+            <td>{{ interaction.type | title }}</td>
+            <td>{{ interaction.summary }}</td>
+            <td>{{ interaction.next_action or "-" }}</td>
+            <td>{{ interaction.next_action_due.strftime("%Y-%m-%d") if interaction.next_action_due else "-" }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+    <p class="empty">No next actions are due today or overdue.</p>
+{% endif %}
+{% endblock %}
