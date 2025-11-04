@@ -15,8 +15,10 @@
     <label for="interaction_type">Interaction Type</label>
     <select id="interaction_type" name="interaction_type" required>
         {% set selected_type = form_data.interaction_type if form_data else '' %}
-        {% for option in ["email", "call", "meeting", "note"] %}
-            <option value="{{ option }}" {% if option == selected_type %}selected{% endif %}>{{ option | title }}</option>
+        {% for option in ["email", "linkedin", "call", "meeting", "note"] %}
+            <option value="{{ option }}" {% if option == selected_type %}selected{% endif %}>
+                {{ option | replace("_", " ") | title }}
+            </option>
         {% endfor %}
     </select>
 

@@ -27,6 +27,9 @@
     <label for="linkedin_url">LinkedIn URL</label>
     <input type="text" id="linkedin_url" name="linkedin_url" value="{{ form_data.linkedin_url if form_data else '' }}">
 
+    <label for="website_url">Website URL</label>
+    <input type="text" id="website_url" name="website_url" value="{{ form_data.website_url if form_data else '' }}">
+
     <label for="source">Source</label>
     <select id="source" name="source" required>
         {% set selected_source = form_data.source if form_data else '' %}

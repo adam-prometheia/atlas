@@ -15,10 +15,20 @@
 {% if contact.linkedin_url %}
 <p><strong>LinkedIn:</strong> <a href="{{ contact.linkedin_url }}" target="_blank">{{ contact.linkedin_url }}</a></p>
 {% endif %}
+{% if contact.website_url %}
+<p><strong>Website:</strong> <a href="{{ contact.website_url }}" target="_blank">{{ contact.website_url }}</a></p>
+{% endif %}
 <p><strong>Source:</strong> {{ contact.source | replace("_", " ") | title }}</p>
 <p><strong>Status:</strong> {{ contact.status | replace("_", " ") | title }}</p>
 <p><strong>Created:</strong> {{ contact.created_at.strftime("%Y-%m-%d %H:%M") if contact.created_at else "-" }}</p>
 <p><strong>Updated:</strong> {{ contact.updated_at.strftime("%Y-%m-%d %H:%M") if contact.updated_at else "-" }}</p>
+
+<div style="margin: 1.5rem 0;">
+    <button type="button" class="button" onclick="draftEmail('draft_first_email')">Draft First Email</button>
+    <button type="button" class="button secondary" style="margin-left: 0.5rem;" onclick="draftEmail('draft_followup')">Draft Follow-up Email</button>
+    <p id="draft-status" class="empty" style="display: none; margin-top: 0.75rem;"></p>
+    <textarea id="draft-output" style="display: none; width: 100%; height: 220px; margin-top: 0.75rem;"></textarea>
+</div>
 
 <div class="section-header">
     <h2>Interactions</h2>
@@ -59,7 +69,7 @@
 <table>
     <thead>
         <tr>
-            <th>Meeting Date</th>
+            <th>Date</th>
             <th>Raw Notes</th>
             <th>Processed Summary</th>
         </tr>
@@ -77,4 +87,28 @@
 {% else %}
     <p class="empty">No notes recorded yet.</p>
 {% endif %}
+
+<script>
+    async function draftEmail(endpoint) {
+        const statusEl = document.getElementById("draft-status");
+        const outputEl = document.getElementById("draft-output");
+        statusEl.style.display = "block";
+        statusEl.textContent = "Generating email draft...";
+        outputEl.style.display = "none";
+        try {
+            const response = await fetch(`/contacts/{{ contact.id }}/${endpoint}`, {
+                method: "POST"
+            });
+            if (!response.ok) {
+                throw new Error(`Server responded with ${response.status}`);
+            }
+            const data = await response.json();
+            outputEl.value = data.email || "";
+            outputEl.style.display = "block";
+            statusEl.textContent = "Draft ready below. Feel free to edit before sending.";
+        } catch (error) {
+            statusEl.textContent = `Unable to generate draft: ${error.message}`;
+        }
+    }
+</script>
 {% endblock %}

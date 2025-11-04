@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from . import models
+from . import llm, models
 from .database import Base, engine, get_db
 
 
@@ -54,6 +54,7 @@ def create_contact(
     role: str = Form(...),
     email: str = Form(...),
     linkedin_url: Optional[str] = Form(None),
+    website_url: Optional[str] = Form(None),
     source: str = Form(...),
     status: str = Form(...),
     db: Session = Depends(get_db),
@@ -64,6 +65,7 @@ def create_contact(
         role=role,
         email=email,
         linkedin_url=linkedin_url,
+        website_url=website_url,
         source=source,
         status=status,
     )
@@ -84,6 +86,7 @@ def create_contact(
                     "role": role,
                     "email": email,
                     "linkedin_url": linkedin_url,
+                    "website_url": website_url,
                     "source": source,
                     "status": status,
                 },
@@ -262,11 +265,43 @@ def _ensure_contact_exists(contact_id: int, db: Session) -> models.Contact:
 
 @app.post("/contacts/{contact_id}/draft_first_email")
 def draft_first_email(contact_id: int, db: Session = Depends(get_db)):
-    _ensure_contact_exists(contact_id, db)
-    return {"email": "TODO first email draft"}
+    contact = _ensure_contact_exists(contact_id, db)
+    website_summary = None
+    if contact.website_url:
+        try:
+            website_summary = llm.fetch_and_summarise_website(contact.website_url, contact.company_name)
+        except Exception:
+            website_summary = None
+    try:
+        email_text = llm.draft_first_email(contact, website_summary)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:  # Catch network/API errors and relay a readable message.
+        raise HTTPException(status_code=502, detail=f"Email drafting service unavailable: {exc}") from exc
+    return {"email": email_text}
 
 
 @app.post("/contacts/{contact_id}/draft_followup")
 def draft_followup_email(contact_id: int, db: Session = Depends(get_db)):
-    _ensure_contact_exists(contact_id, db)
-    return {"email": "TODO followup draft"}
+    contact = _ensure_contact_exists(contact_id, db)
+    interactions = (
+        db.query(models.Interaction)
+        .filter(models.Interaction.contact_id == contact.id)
+        .order_by(models.Interaction.timestamp.desc())
+        .limit(10)
+        .all()
+    )
+    notes = (
+        db.query(models.Note)
+        .filter(models.Note.contact_id == contact.id)
+        .order_by(models.Note.meeting_date.desc())
+        .limit(3)
+        .all()
+    )
+    try:
+        email_text = llm.draft_followup_email(contact, interactions, notes)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Email drafting service unavailable: {exc}") from exc
+    return {"email": email_text}

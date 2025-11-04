@@ -44,6 +44,7 @@ class ContactBase(BaseModel):
     role: str
     email: EmailStr
     linkedin_url: Optional[str] = None
+    website_url: Optional[str] = None
     source: str
     status: str
 

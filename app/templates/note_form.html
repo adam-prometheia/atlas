@@ -12,13 +12,16 @@
     </div>
 {% endif %}
 <form method="post" action="/contacts/{{ contact.id }}/notes">
-    <label for="meeting_date">Meeting Date</label>
-    <input type="date" id="meeting_date" name="meeting_date" value="{{ form_data.meeting_date if form_data else '' }}" required>
+    <label for="meeting_date">Date</label>
+    <input type="date" id="meeting_date" name="meeting_date"
+           value="{{ form_data.meeting_date if form_data else '' }}" required>
 
     <label for="raw_notes">Raw Notes</label>
+    <p class="help-text">Dump everything here – bullets, rough notes, or a transcript paste.</p>
     <textarea id="raw_notes" name="raw_notes" rows="6" required>{{ form_data.raw_notes if form_data else '' }}</textarea>
 
     <label for="processed_summary">Processed Summary</label>
+    <p class="help-text">Cleaned-up takeaways in your own words. Feel free to leave blank for now.</p>
     <textarea id="processed_summary" name="processed_summary" rows="4">{{ form_data.processed_summary if form_data else '' }}</textarea>
 
     <div style="margin-top: 1.5rem;">

@@ -14,6 +14,7 @@ class Contact(Base):
     role = Column(String(255), nullable=False)
     email = Column(String(255), nullable=False, unique=True)
     linkedin_url = Column(String(512), nullable=True)
+    website_url = Column(String(512), nullable=True)
     source = Column(String(100), nullable=False)
     status = Column(String(100), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
