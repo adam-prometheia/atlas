@@ -9,7 +9,12 @@ from openai import OpenAI
 
 from . import models
 
-_MODEL_NAME = "gpt-5-mini-2025-08-07"
+_DRAFTING_MODEL = "gpt-5-mini-2025-08-07"
+_SUMMARISER_MODEL = "gpt-5-nano-2025-08-07"
+_DEFAULT_SYSTEM_MESSAGE = (
+    "You assist Adam Phillips with business development tooling."
+    " Stay factual, pragmatic, and concise."
+)
 
 _MARCIN_EXAMPLE_EMAIL = """Subject: Exploring pragmatic AI pilots
 
@@ -26,9 +31,12 @@ Adam"""
 
 
 def fetch_and_summarise_website(url: str, company_name: str) -> str:
-    """Fetches a website and produces a concise business + AI opportunity summary."""
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
+    """Fetch a homepage and derive structured BD notes."""
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as exc:  # pragma: no cover - network guardrail
+        raise RuntimeError("Website content could not be fetched reliably.") from exc
 
     soup = BeautifulSoup(response.text, "html.parser")
     for tag in soup(["script", "style", "noscript"]):
@@ -40,18 +48,28 @@ def fetch_and_summarise_website(url: str, company_name: str) -> str:
 
     prompt = f"""
 You are BD_WEBSITE_ANALYSER.
-Summarise the company below in 5-7 concise bullets describing what they do and who they serve.
-Then craft exactly 3 additional bullets highlighting realistic, non-hype AI opportunities you can credibly infer.
-Maintain a neutral tone and avoid inventing new offerings.
+A company homepage excerpt is provided. Work only with the evidence below.
 
 Company name: {company_name}
 Website URL: {url}
 
 Homepage excerpt:
 \"\"\"{truncated}\"\"\"
+
+Output exactly two sections in this format:
+What they do
+- 5-7 bullets covering offerings, customers, differentiators (≤ 20 words each)
+
+Credible AI pilots
+- Exactly 3 bullets describing pragmatic pilots Adam Phillips could propose, echoing "start small → prove value → scale what works"
+
+Rules:
+- Use only facts from the excerpt; if something is missing, append (unclear).
+- Avoid buzzwords and invention.
+- Keep every bullet short and concrete.
 """.strip()
 
-    return _invoke_model(prompt)
+    return _invoke_model(prompt, model=_DRAFTING_MODEL)
 
 
 def _infer_first_name(full_name: str) -> Optional[str]:
@@ -63,22 +81,29 @@ def _infer_first_name(full_name: str) -> Optional[str]:
     return parts[0]
 
 
-def draft_first_email(contact: models.Contact, website_summary: Optional[str]) -> str:
-    """Drafts the first outreach email in Adam's voice."""
+def _build_greeting(contact: models.Contact) -> str:
     first_name = _infer_first_name(contact.name)
-    greeting = f"Hi {first_name}," if first_name else f"Hi {contact.name},"
+    if first_name:
+        return f"Hi {first_name},"
+    if contact.name:
+        return f"Hi {contact.name},"
+    return "Hi there,"
 
+
+def draft_first_email(contact: models.Contact, website_summary: Optional[str]) -> str:
+    """Draft the first outreach email in Adam's voice."""
+    greeting = _build_greeting(contact)
     summary_section = (
-        f"\nWebsite summary:\n{website_summary}\n"
+        f"Website summary available:\n{website_summary}\n"
         if website_summary
-        else "\nWebsite summary unavailable.\n"
+        else "Website summary unavailable – acknowledge this lightly."
     )
 
     prompt = f"""
-You are BD_FIRST_EMAIL_WRITER. Write an email from Adam Phillips.
-Use the example email only as a tone/structure reference. Do not copy phrases, and do not reference Emerson or Marcin.
+You are BD_FIRST_EMAIL_WRITER. Draft Adam Phillips' first outreach email.
+Use this reference only for tone; do not reuse phrasing or mention Emerson/Marcin.
 
-Example email:
+Reference tone:
 \"\"\"{_MARCIN_EXAMPLE_EMAIL}\"\"\"
 
 Contact details:
@@ -86,15 +111,23 @@ Contact details:
 - Role: {contact.role}
 - Company: {contact.company_name}
 
-Adam's positioning: forethought first, start small → prove value → scale what works.
-Greeting requirement: use "{greeting}".
-Structure: one paragraph introducing Adam + credibility, one paragraph grounded in the company's context, and a clear ask for a 20–30 minute conversation.
-Word limit: under 220 words.
-Tone: plain English, pragmatic, non-hypey.
 {summary_section}
+
+Output requirements:
+Subject: ≤ 7 words, plain English
+{greeting}
+
+Paragraph 1: Introduce Adam, establish credibility, restate "forethought first, start small → prove value → scale what works".
+Paragraph 2: Tie value to the contact's role and company, using the website summary when available.
+Closing sentence: Ask for a 20–30 minute call next week.
+
+Constraints:
+- ≤ 220 words.
+- Plain English, pragmatic, no hype.
+- If the website summary was unavailable, note that gently rather than speculating.
 """.strip()
 
-    return _invoke_model(prompt)
+    return _invoke_model(prompt, model=_DRAFTING_MODEL)
 
 
 def draft_followup_email(
@@ -102,7 +135,9 @@ def draft_followup_email(
     interactions: Sequence[models.Interaction],
     notes: Sequence[models.Note],
 ) -> str:
-    """Drafts a follow-up email after previous interactions."""
+    """Draft a follow-up email after prior touchpoints."""
+    greeting = _build_greeting(contact)
+
     if interactions:
         interaction_lines = []
         for interaction in interactions:
@@ -114,24 +149,26 @@ def draft_followup_email(
             else:
                 ts_display = "Unknown date"
             interaction_lines.append(
-                f"- {ts_display} ({interaction.type}) {interaction.summary}"
+                f"- {ts_display}: {interaction.type.replace('_', ' ')} — {interaction.summary}"
             )
         interactions_section = "\n".join(interaction_lines)
     else:
         interactions_section = "No prior interactions recorded."
 
-    if notes:
-        latest = notes[0]
-        note_summary = latest.processed_summary or "No processed summary available."
-        note_section = (
-            f"Latest note:\nRaw notes: {latest.raw_notes}\nProcessed summary: {note_summary}"
-        )
+    latest_note = notes[0] if notes else None
+    if latest_note and latest_note.meeting_date:
+        note_date = latest_note.meeting_date.strftime("%Y-%m-%d")
+    elif latest_note:
+        note_date = "Unknown date"
     else:
-        note_section = "Latest note: None recorded."
+        note_date = None
+
+    note_raw = latest_note.raw_notes if latest_note else ""
+    note_summary = latest_note.processed_summary if latest_note else ""
 
     prompt = f"""
 You are BD_FOLLOWUP_WRITER. Create a concise follow-up email from Adam Phillips.
-Keep the tone helpful and pragmatic, highlighting Adam's "assist, not replace" and "forethought first" philosophy.
+Keep the tone helpful, emphasising Adam's "assist, not replace" mindset and his stance of "forethought first, start small → prove value → scale what works".
 
 Contact details:
 - Name: {contact.name}
@@ -141,18 +178,115 @@ Contact details:
 Recent interactions:
 {interactions_section}
 
-{note_section}
+Latest note raw text: {note_raw or '(none)'}
+Latest note summary: {note_summary or '(none)'}
+Latest note date: {note_date or '(none)'}
 
-Requirements:
-- Briefly recap the previous touchpoints.
-- Reframe 1–2 key problems or opportunities surfaced so far.
-- Propose one clear next step (e.g. workshop, pilot).
-- Stay under 350 words.
-- Avoid introducing new pricing promises unless explicitly provided.
-Tone: plain English, collaborative, non-hypey.
+Output structure:
+Subject: ≤ 7 words
+{greeting}
+
+Paragraph 1: Recap the last touchpoint(s) with dates.
+2-3 bullets: Pains/opportunities surfaced so far, echo "assist, not replace". Mark uncertain items with (need confirmation).
+Final paragraph: Offer one clear next step (e.g. workshop or pilot) and ask for a 20–30 minute call next week.
+
+Constraints:
+- < 350 words.
+- No new pricing promises.
+- Plain English, pragmatic tone.
 """.strip()
 
-    return _invoke_model(prompt)
+    return _invoke_model(prompt, model=_DRAFTING_MODEL)
+
+
+def draft_custom_email(
+    contact: models.Contact,
+    *,
+    greeting: str,
+    purpose: str,
+    tone: str,
+    brief: str,
+    additional_context: Optional[str],
+    website_summary: Optional[str],
+) -> str:
+    """Draft a custom email based on user-provided intent."""
+    purpose_notes = {
+        "intro": "Ask for a first conversation next week.",
+        "follow_up": "Reference prior exchanges and ask for a progress call next week.",
+        "check_in": "Check in on momentum and request a brief sync next week.",
+        "other": "Follow the purpose implied by the brief."
+    }
+    aligned_ask = purpose_notes.get(purpose, "Follow the brief." )
+
+    prompt = f"""
+You are BD_CUSTOM_EMAIL_WRITER supporting Adam Phillips.
+
+Contact:
+- Name: {contact.name}
+- Role: {contact.role}
+- Company: {contact.company_name}
+
+Greeting to use verbatim: {greeting}
+Purpose: {purpose}
+Required ask: {aligned_ask}
+Tone: {tone}
+Brief / intents: {brief}
+Additional context: {additional_context or '(none supplied)'}
+Website summary: {website_summary or '(not available — flag gaps with (more detail needed))'}
+
+Output structure:
+Subject: ≤ 8 words aligned with the purpose.
+{greeting}
+
+Write 2–3 lean paragraphs:
+- Reflect the requested tone.
+- Preserve all concrete intents from the brief.
+- Restate "forethought first, start small → prove value → scale what works" naturally.
+- Include a specific next step that matches the purpose (if purpose is "other", infer it from the brief).
+
+Rules:
+- No hype. Plain English.
+- Do not mention Emerson or Marcin.
+- Flag missing context with "(more detail needed)".
+""".strip()
+
+    return _invoke_model(prompt, model=_DRAFTING_MODEL)
+
+
+def summarise_note(note: models.Note, contact: models.Contact) -> str:
+    """Produce a structured summary of raw meeting notes."""
+    meeting_date = note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else "(unclear)"
+    prompt = f"""
+You are BD_NOTES_SUMMARISER. Turn the raw notes into structured bullets.
+
+Contact: {contact.name} ({contact.company_name})
+Meeting date: {meeting_date}
+Raw notes:
+\"\"\"{note.raw_notes}\"\"\"
+
+Output the sections exactly as listed:
+Context
+- bullets ≤ 18 words each
+
+Current process
+- bullets ≤ 18 words each
+
+Pains & risks
+- bullets ≤ 18 words each
+
+Potential AI fits
+- include only justified items; prefix speculative ideas with "Possible:"; mark gaps with (unclear)
+
+Next steps / decisions
+- bullets ≤ 18 words; mark unknowns with (unclear)
+
+Rules:
+- Do not invent facts.
+- Flag uncertainties with (unclear).
+- Keep the tone neutral and factual.
+""".strip()
+
+    return _invoke_model(prompt, model=_SUMMARISER_MODEL)
 
 
 @lru_cache()
@@ -165,18 +299,32 @@ def _get_client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
-def _invoke_model(prompt: str) -> str:
-    """Call the OpenAI client, preferring the Responses API with a Chat fallback."""
+def _invoke_model(
+    prompt: str,
+    *,
+    model: Optional[str] = None,
+    system_message: Optional[str] = None,
+) -> str:
+    """Call the OpenAI client, preferring the Responses API with a chat fallback."""
+    target_model = model or _DRAFTING_MODEL
+    system_prompt = system_message or _DEFAULT_SYSTEM_MESSAGE
     client = _get_client()
+
     if hasattr(client, "responses"):
-        response = client.responses.create(model=_MODEL_NAME, input=prompt)
+        response = client.responses.create(
+            model=target_model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+        )
         return getattr(response, "output_text", "").strip()
 
     if hasattr(client, "chat") and hasattr(client.chat, "completions"):
         completion = client.chat.completions.create(
-            model=_MODEL_NAME,
+            model=target_model,
             messages=[
-                {"role": "system", "content": "You are an assistant helping with BD emails."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
         )

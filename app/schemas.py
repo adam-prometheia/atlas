@@ -9,6 +9,8 @@ class InteractionBase(BaseModel):
     summary: str
     next_action: Optional[str] = None
     next_action_due: Optional[date] = None
+    outcome: str = "pending"
+    outcome_notes: Optional[str] = None
 
 
 class InteractionCreate(InteractionBase):

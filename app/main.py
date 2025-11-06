@@ -1,9 +1,10 @@
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,6 +14,148 @@ from .database import Base, engine, get_db
 
 app = FastAPI(title="ATLAS - AI Toolkit for Lead Activation & Stewardship")
 templates = Jinja2Templates(directory="app/templates")
+
+
+INTERACTION_TYPES = ["email", "linkedin", "call", "meeting", "note"]
+INTERACTION_OUTCOMES = [
+    ("pending", "Pending"),
+    ("no_reply", "No reply"),
+    ("positive_meeting", "Positive – meeting booked"),
+    ("positive_intro", "Positive – intro made"),
+    ("soft_negative", "Soft negative"),
+    ("hard_negative", "Hard negative"),
+]
+CONTACT_SOURCES = ["referral", "cold_linkedin", "event", "other"]
+CONTACT_STATUSES = ["prospect", "meeting_booked", "proposal_sent", "client"]
+CUSTOM_EMAIL_PURPOSES = [
+    ("intro", "Intro outreach"),
+    ("follow_up", "Follow-up"),
+    ("check_in", "Check-in"),
+    ("other", "Other (specify in brief)"),
+]
+CUSTOM_EMAIL_TONES = [
+    ("warm", "Warm"),
+    ("direct", "Direct"),
+    ("formal", "Formal"),
+    ("enthusiastic", "Upbeat"),
+]
+DEFAULT_CUSTOM_EMAIL_FORM = {
+    "purpose": "intro",
+    "tone": "warm",
+    "brief": "",
+    "context": "",
+}
+
+
+def parse_date_or_error(value: Optional[str], *, field_name: str, fmt: str = "%Y-%m-%d") -> Tuple[Optional[date], Optional[str]]:
+    if not value:
+        return None, None
+    try:
+        parsed = datetime.strptime(value, fmt).date()
+    except ValueError:
+        return None, f"Invalid date format for {field_name}."
+    return parsed, None
+
+
+def _infer_first_name(full_name: str) -> Optional[str]:
+    if not full_name:
+        return None
+    parts = [part for part in full_name.strip().split(" ") if part]
+    return parts[0] if parts else None
+
+
+def _build_greeting(contact: models.Contact) -> str:
+    first_name = _infer_first_name(contact.name)
+    if first_name:
+        return f"Hi {first_name},"
+    if contact.name:
+        return f"Hi {contact.name},"
+    return "Hi there,"
+
+
+def _ensure_contact_exists(contact_id: int, db: Session) -> models.Contact:
+    contact = db.query(models.Contact).filter(models.Contact.id == contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return contact
+
+
+def _get_interaction_with_contact(interaction_id: int, db: Session) -> models.Interaction:
+    interaction = (
+        db.query(models.Interaction)
+        .options(selectinload(models.Interaction.contact))
+        .filter(models.Interaction.id == interaction_id)
+        .first()
+    )
+    if not interaction:
+        raise HTTPException(status_code=404, detail="Interaction not found")
+    return interaction
+
+
+def _get_note_with_contact(note_id: int, db: Session) -> models.Note:
+    note = (
+        db.query(models.Note)
+        .options(selectinload(models.Note.contact))
+        .filter(models.Note.id == note_id)
+        .first()
+    )
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return note
+
+
+def _get_contact_with_history(contact_id: int, db: Session) -> models.Contact:
+    contact = (
+        db.query(models.Contact)
+        .options(
+            selectinload(models.Contact.interactions),
+            selectinload(models.Contact.notes),
+        )
+        .filter(models.Contact.id == contact_id)
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return contact
+
+
+def _contact_form_context(request: Request, *, errors, form_data: Optional[Dict], contact: Optional[models.Contact] = None):
+    return {
+        "request": request,
+        "errors": errors,
+        "form_data": form_data,
+        "contact": contact,
+        "contact_sources": CONTACT_SOURCES,
+        "contact_statuses": CONTACT_STATUSES,
+    }
+
+
+def _interaction_form_context(
+    request: Request,
+    *,
+    contact: models.Contact,
+    errors,
+    form_data: Dict,
+):
+    return {
+        "request": request,
+        "contact": contact,
+        "errors": errors,
+        "form_data": form_data,
+        "interaction_types": INTERACTION_TYPES,
+        "interaction_outcomes": INTERACTION_OUTCOMES,
+    }
+
+
+def _try_fetch_website_summary(contact: models.Contact) -> Optional[str]:
+    if not contact.website_url:
+        return None
+    try:
+        return llm.fetch_and_summarise_website(contact.website_url, contact.company_name)
+    except RuntimeError:
+        return None
+    except Exception:
+        return None
 
 
 @app.on_event("startup")
@@ -26,15 +169,34 @@ def root():
 
 
 @app.get("/contacts")
-def list_contacts(request: Request, db: Session = Depends(get_db)):
-    contacts = (
-        db.query(models.Contact)
-        .order_by(models.Contact.created_at.desc())
-        .all()
-    )
+def list_contacts(
+    request: Request,
+    status: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    query = db.query(models.Contact)
+    if status:
+        query = query.filter(models.Contact.status == status)
+    search_value = q.strip() if q else ""
+    if search_value:
+        like_value = f"%{search_value}%"
+        query = query.filter(
+            or_(
+                models.Contact.name.ilike(like_value),
+                models.Contact.company_name.ilike(like_value),
+            )
+        )
+    contacts = query.order_by(models.Contact.created_at.desc()).all()
     return templates.TemplateResponse(
         "contacts_list.html",
-        {"request": request, "contacts": contacts},
+        {
+            "request": request,
+            "contacts": contacts,
+            "status": status,
+            "q": search_value,
+            "contact_statuses": CONTACT_STATUSES,
+        },
     )
 
 
@@ -42,7 +204,7 @@ def list_contacts(request: Request, db: Session = Depends(get_db)):
 def new_contact_form(request: Request):
     return templates.TemplateResponse(
         "contact_form.html",
-        {"request": request, "errors": [], "form_data": None},
+        _contact_form_context(request, errors=[], form_data=None),
     )
 
 
@@ -74,24 +236,20 @@ def create_contact(
         db.commit()
     except IntegrityError:
         db.rollback()
-        # Re-render the form with an error message if the email already exists.
+        errors = ["A contact with that email already exists."]
+        form_data = {
+            "name": name,
+            "company_name": company_name,
+            "role": role,
+            "email": email,
+            "linkedin_url": linkedin_url,
+            "website_url": website_url,
+            "source": source,
+            "status": status,
+        }
         return templates.TemplateResponse(
             "contact_form.html",
-            {
-                "request": request,
-                "errors": ["A contact with that email already exists."],
-                "form_data": {
-                    "name": name,
-                    "company_name": company_name,
-                    "role": role,
-                    "email": email,
-                    "linkedin_url": linkedin_url,
-                    "website_url": website_url,
-                    "source": source,
-                    "status": status,
-                },
-            },
-            status_code=400,
+            _contact_form_context(request, errors=errors, form_data=form_data),
         )
 
     db.refresh(contact)
@@ -106,12 +264,7 @@ def edit_contact_form(contact_id: int, request: Request, db: Session = Depends(g
     contact = _ensure_contact_exists(contact_id, db)
     return templates.TemplateResponse(
         "contact_edit_form.html",
-        {
-            "request": request,
-            "contact": contact,
-            "errors": [],
-            "form_data": None,
-        },
+        _contact_form_context(request, errors=[], form_data=None, contact=contact),
     )
 
 
@@ -144,24 +297,20 @@ def update_contact(
     except IntegrityError:
         db.rollback()
         contact = _ensure_contact_exists(contact_id, db)
+        errors = ["A contact with that email already exists."]
+        form_data = {
+            "name": name,
+            "company_name": company_name,
+            "role": role,
+            "email": email,
+            "linkedin_url": linkedin_url,
+            "website_url": website_url,
+            "source": source,
+            "status": status,
+        }
         return templates.TemplateResponse(
             "contact_edit_form.html",
-            {
-                "request": request,
-                "contact": contact,
-                "errors": ["A contact with that email already exists."],
-                "form_data": {
-                    "name": name,
-                    "company_name": company_name,
-                    "role": role,
-                    "email": email,
-                    "linkedin_url": linkedin_url,
-                    "website_url": website_url,
-                    "source": source,
-                    "status": status,
-                },
-            },
-            status_code=400,
+            _contact_form_context(request, errors=errors, form_data=form_data, contact=contact),
         )
 
     db.refresh(contact)
@@ -171,24 +320,9 @@ def update_contact(
     )
 
 
-def _get_contact_or_404(contact_id: int, db: Session) -> models.Contact:
-    contact = (
-        db.query(models.Contact)
-        .options(
-            selectinload(models.Contact.interactions),
-            selectinload(models.Contact.notes),
-        )
-        .filter(models.Contact.id == contact_id)
-        .first()
-    )
-    if not contact:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return contact
-
-
 @app.get("/contacts/{contact_id}", name="get_contact_detail")
 def get_contact_detail(contact_id: int, request: Request, db: Session = Depends(get_db)):
-    contact = _get_contact_or_404(contact_id, db)
+    contact = _get_contact_with_history(contact_id, db)
     return templates.TemplateResponse(
         "contact_detail.html",
         {
@@ -200,16 +334,19 @@ def get_contact_detail(contact_id: int, request: Request, db: Session = Depends(
 
 @app.get("/contacts/{contact_id}/interactions/new")
 def new_interaction_form(contact_id: int, request: Request, db: Session = Depends(get_db)):
-    contact = _get_contact_or_404(contact_id, db)
+    contact = _ensure_contact_exists(contact_id, db)
     default_due = (date.today() + timedelta(days=7)).isoformat()
+    form_data = {
+        "interaction_type": INTERACTION_TYPES[0],
+        "summary": "",
+        "next_action": "",
+        "next_action_due": default_due,
+        "outcome": "pending",
+        "outcome_notes": None,
+    }
     return templates.TemplateResponse(
         "interaction_form.html",
-        {
-            "request": request,
-            "contact": contact,
-            "errors": [],
-            "form_data": {"next_action_due": default_due},
-        },
+        _interaction_form_context(request, contact=contact, errors=[], form_data=form_data),
     )
 
 
@@ -221,39 +358,125 @@ def create_interaction(
     summary: str = Form(...),
     next_action: Optional[str] = Form(None),
     next_action_due: Optional[str] = Form(None),
+    outcome: str = Form("pending"),
+    outcome_notes: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
-    contact = _get_contact_or_404(contact_id, db)
+    contact = _ensure_contact_exists(contact_id, db)
+    form_data = {
+        "interaction_type": interaction_type,
+        "summary": summary,
+        "next_action": next_action,
+        "next_action_due": next_action_due,
+        "outcome": outcome,
+        "outcome_notes": outcome_notes,
+    }
 
-    parsed_due_date: Optional[date] = None
-    if next_action_due:
-        try:
-            parsed_due_date = datetime.strptime(next_action_due, "%Y-%m-%d").date()
-        except ValueError:
-            return templates.TemplateResponse(
-                "interaction_form.html",
-                {
-                    "request": request,
-                    "contact": contact,
-                    "errors": ["Invalid date format for next action due."],
-                    "form_data": {
-                        "interaction_type": interaction_type,
-                        "summary": summary,
-                        "next_action": next_action,
-                        "next_action_due": next_action_due,
-                    },
-                },
-                status_code=400,
-            )
+    parsed_due, due_error = parse_date_or_error(next_action_due, field_name="next action due")
+    errors = [due_error] if due_error else []
+
+    if errors:
+        return templates.TemplateResponse(
+            "interaction_form.html",
+            _interaction_form_context(request, contact=contact, errors=errors, form_data=form_data),
+        )
 
     interaction = models.Interaction(
         contact_id=contact.id,
         type=interaction_type,
         summary=summary,
         next_action=next_action,
-        next_action_due=parsed_due_date,
+        next_action_due=parsed_due,
+        outcome=outcome,
+        outcome_notes=outcome_notes,
     )
     db.add(interaction)
+    db.commit()
+
+    return RedirectResponse(
+        url=request.url_for("get_contact_detail", contact_id=contact.id),
+        status_code=303,
+    )
+
+
+@app.get("/interactions/{interaction_id}/edit")
+def edit_interaction_form(interaction_id: int, request: Request, db: Session = Depends(get_db)):
+    interaction = _get_interaction_with_contact(interaction_id, db)
+    contact = interaction.contact or _ensure_contact_exists(interaction.contact_id, db)
+    form_data = {
+        "interaction_type": interaction.type,
+        "summary": interaction.summary,
+        "next_action": interaction.next_action or "",
+        "next_action_due": interaction.next_action_due.isoformat() if interaction.next_action_due else "",
+        "outcome": interaction.outcome,
+        "outcome_notes": interaction.outcome_notes or "",
+    }
+    context = _interaction_form_context(
+        request,
+        contact=contact,
+        errors=[],
+        form_data=form_data,
+    )
+    context.update(
+        {
+            "form_action": f"/interactions/{interaction.id}/edit",
+            "submit_label": "Update Interaction",
+            "heading": f"Edit Interaction for {contact.name}",
+        }
+    )
+    return templates.TemplateResponse("interaction_form.html", context)
+
+
+@app.post("/interactions/{interaction_id}/edit")
+def update_interaction(
+    interaction_id: int,
+    request: Request,
+    interaction_type: str = Form(...),
+    summary: str = Form(...),
+    next_action: Optional[str] = Form(None),
+    next_action_due: Optional[str] = Form(None),
+    outcome: str = Form(...),
+    outcome_notes: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    interaction = _get_interaction_with_contact(interaction_id, db)
+    contact = interaction.contact or _ensure_contact_exists(interaction.contact_id, db)
+
+    form_data = {
+        "interaction_type": interaction_type,
+        "summary": summary,
+        "next_action": next_action or "",
+        "next_action_due": next_action_due or "",
+        "outcome": outcome,
+        "outcome_notes": outcome_notes or "",
+    }
+
+    parsed_due, due_error = parse_date_or_error(next_action_due, field_name="next action due")
+    errors = [due_error] if due_error else []
+
+    if errors:
+        context = _interaction_form_context(
+            request,
+            contact=contact,
+            errors=errors,
+            form_data=form_data,
+        )
+        context.update(
+            {
+                "form_action": f"/interactions/{interaction.id}/edit",
+                "submit_label": "Update Interaction",
+                "heading": f"Edit Interaction for {contact.name}",
+            }
+        )
+        return templates.TemplateResponse("interaction_form.html", context)
+
+    interaction.type = interaction_type
+    interaction.summary = summary
+    interaction.next_action = next_action
+    interaction.next_action_due = parsed_due
+    interaction.outcome = outcome
+    interaction.outcome_notes = outcome_notes
+
     db.commit()
 
     return RedirectResponse(
@@ -282,10 +505,15 @@ def delete_interaction(interaction_id: int, request: Request, db: Session = Depe
 
 @app.get("/contacts/{contact_id}/notes/new")
 def new_note_form(contact_id: int, request: Request, db: Session = Depends(get_db)):
-    contact = _get_contact_or_404(contact_id, db)
+    contact = _ensure_contact_exists(contact_id, db)
     return templates.TemplateResponse(
         "note_form.html",
-        {"request": request, "contact": contact, "errors": [], "form_data": None},
+        {
+            "request": request,
+            "contact": contact,
+            "errors": [],
+            "form_data": None,
+        },
     )
 
 
@@ -298,24 +526,29 @@ def create_note(
     processed_summary: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
-    contact = _get_contact_or_404(contact_id, db)
+    contact = _ensure_contact_exists(contact_id, db)
+    form_data = {
+        "meeting_date": meeting_date,
+        "raw_notes": raw_notes,
+        "processed_summary": processed_summary,
+    }
 
-    try:
-        parsed_meeting_date = datetime.strptime(meeting_date, "%Y-%m-%d").date()
-    except ValueError:
+    parsed_meeting_date, date_error = parse_date_or_error(meeting_date, field_name="meeting date")
+    errors = []
+    if not meeting_date:
+        errors.append("Meeting date is required.")
+    elif date_error:
+        errors.append(date_error)
+
+    if errors:
         return templates.TemplateResponse(
             "note_form.html",
             {
                 "request": request,
                 "contact": contact,
-                "errors": ["Invalid date format for meeting date."],
-                "form_data": {
-                    "raw_notes": raw_notes,
-                    "processed_summary": processed_summary,
-                    "meeting_date": meeting_date,
-                },
+                "errors": errors,
+                "form_data": form_data,
             },
-            status_code=400,
         )
 
     note = models.Note(
@@ -325,6 +558,80 @@ def create_note(
         processed_summary=processed_summary,
     )
     db.add(note)
+    db.commit()
+
+    return RedirectResponse(
+        url=request.url_for("get_contact_detail", contact_id=contact.id),
+        status_code=303,
+    )
+
+
+@app.get("/notes/{note_id}/edit")
+def edit_note_form(note_id: int, request: Request, db: Session = Depends(get_db)):
+    note = _get_note_with_contact(note_id, db)
+    contact = note.contact or _ensure_contact_exists(note.contact_id, db)
+    form_data = {
+        "meeting_date": note.meeting_date.isoformat() if note.meeting_date else "",
+        "raw_notes": note.raw_notes,
+        "processed_summary": note.processed_summary or "",
+    }
+    return templates.TemplateResponse(
+        "note_form.html",
+        {
+            "request": request,
+            "contact": contact,
+            "errors": [],
+            "form_data": form_data,
+            "form_action": f"/notes/{note.id}/edit",
+            "submit_label": "Update Note",
+            "heading": f"Edit Note for {contact.name}",
+        },
+    )
+
+
+@app.post("/notes/{note_id}/edit")
+def update_note(
+    note_id: int,
+    request: Request,
+    meeting_date: str = Form(...),
+    raw_notes: str = Form(...),
+    processed_summary: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    note = _get_note_with_contact(note_id, db)
+    contact = note.contact or _ensure_contact_exists(note.contact_id, db)
+
+    form_data = {
+        "meeting_date": meeting_date or "",
+        "raw_notes": raw_notes,
+        "processed_summary": processed_summary or "",
+    }
+
+    parsed_date, date_error = parse_date_or_error(meeting_date, field_name="meeting date")
+    errors = []
+    if not meeting_date:
+        errors.append("Meeting date is required.")
+    elif date_error:
+        errors.append(date_error)
+
+    if errors:
+        return templates.TemplateResponse(
+            "note_form.html",
+            {
+                "request": request,
+                "contact": contact,
+                "errors": errors,
+                "form_data": form_data,
+                "form_action": f"/notes/{note.id}/edit",
+                "submit_label": "Update Note",
+                "heading": f"Edit Note for {contact.name}",
+            },
+        )
+
+    note.meeting_date = parsed_date
+    note.raw_notes = raw_notes
+    note.processed_summary = processed_summary
+
     db.commit()
 
     return RedirectResponse(
@@ -368,27 +675,33 @@ def list_next_actions(request: Request, db: Session = Depends(get_db)):
     )
 
 
-def _ensure_contact_exists(contact_id: int, db: Session) -> models.Contact:
-    contact = db.query(models.Contact).filter(models.Contact.id == contact_id).first()
-    if not contact:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return contact
+@app.get("/metrics/outcomes")
+def outcomes_metrics(request: Request, db: Session = Depends(get_db)):
+    rows = (
+        db.query(models.Interaction.outcome, func.count(models.Interaction.id))
+        .group_by(models.Interaction.outcome)
+        .order_by(models.Interaction.outcome.asc())
+        .all()
+    )
+    metrics = [
+        {"outcome": outcome or "unknown", "count": count}
+        for outcome, count in rows
+    ]
+    return templates.TemplateResponse(
+        "metrics_outcomes.html",
+        {"request": request, "metrics": metrics},
+    )
 
 
 @app.post("/contacts/{contact_id}/draft_first_email")
 def draft_first_email(contact_id: int, db: Session = Depends(get_db)):
     contact = _ensure_contact_exists(contact_id, db)
-    website_summary = None
-    if contact.website_url:
-        try:
-            website_summary = llm.fetch_and_summarise_website(contact.website_url, contact.company_name)
-        except Exception:
-            website_summary = None
+    website_summary = _try_fetch_website_summary(contact)
     try:
         email_text = llm.draft_first_email(contact, website_summary)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    except Exception as exc:  # Catch network/API errors and relay a readable message.
+    except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Email drafting service unavailable: {exc}") from exc
     return {"email": email_text}
 
@@ -417,3 +730,146 @@ def draft_followup_email(contact_id: int, db: Session = Depends(get_db)):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Email drafting service unavailable: {exc}") from exc
     return {"email": email_text}
+
+
+@app.get("/contacts/{contact_id}/draft_custom_email")
+def custom_email_form(contact_id: int, request: Request, db: Session = Depends(get_db)):
+    contact = _ensure_contact_exists(contact_id, db)
+    website_summary = _try_fetch_website_summary(contact)
+    greeting = _build_greeting(contact)
+    form_defaults = DEFAULT_CUSTOM_EMAIL_FORM.copy()
+    return templates.TemplateResponse(
+        "contact_custom_email.html",
+        {
+            "request": request,
+            "contact": contact,
+            "errors": [],
+            "form_data": form_defaults,
+            "generated_email": None,
+            "greeting": greeting,
+            "email_purposes": CUSTOM_EMAIL_PURPOSES,
+            "email_tones": CUSTOM_EMAIL_TONES,
+            "website_summary": website_summary,
+        },
+    )
+
+
+@app.post("/contacts/{contact_id}/draft_custom_email")
+def generate_custom_email(
+    contact_id: int,
+    request: Request,
+    purpose: str = Form(...),
+    tone: str = Form(...),
+    brief: str = Form(...),
+    context: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    contact = _ensure_contact_exists(contact_id, db)
+    greeting = _build_greeting(contact)
+    website_summary = _try_fetch_website_summary(contact)
+
+    errors = []
+    valid_purposes = {value for value, _ in CUSTOM_EMAIL_PURPOSES}
+    valid_tones = {value for value, _ in CUSTOM_EMAIL_TONES}
+    if purpose not in valid_purposes:
+        errors.append("Select a valid purpose.")
+    if tone not in valid_tones:
+        errors.append("Select a valid tone.")
+    if not brief.strip():
+        errors.append("Provide a brief so the model has direction.")
+
+    form_data = {
+        "purpose": purpose,
+        "tone": tone,
+        "brief": brief,
+        "context": context or "",
+    }
+
+    if errors:
+        return templates.TemplateResponse(
+            "contact_custom_email.html",
+            {
+                "request": request,
+                "contact": contact,
+                "errors": errors,
+                "form_data": form_data,
+                "generated_email": None,
+                "greeting": greeting,
+                "email_purposes": CUSTOM_EMAIL_PURPOSES,
+                "email_tones": CUSTOM_EMAIL_TONES,
+                "website_summary": website_summary,
+            },
+        )
+
+    email_text: Optional[str] = None
+    try:
+        email_text = llm.draft_custom_email(
+            contact=contact,
+            greeting=greeting,
+            purpose=purpose,
+            tone=tone,
+            brief=brief,
+            additional_context=context,
+            website_summary=website_summary,
+        )
+    except RuntimeError as exc:
+        errors.append(f"Unable to generate custom draft: {exc}")
+    except Exception as exc:
+        errors.append(f"Unable to generate custom draft: {exc}")
+
+    if errors:
+        return templates.TemplateResponse(
+            "contact_custom_email.html",
+            {
+                "request": request,
+                "contact": contact,
+                "errors": errors,
+                "form_data": form_data,
+                "generated_email": None,
+                "greeting": greeting,
+                "email_purposes": CUSTOM_EMAIL_PURPOSES,
+                "email_tones": CUSTOM_EMAIL_TONES,
+                "website_summary": website_summary,
+            },
+        )
+
+    return templates.TemplateResponse(
+        "contact_custom_email.html",
+        {
+            "request": request,
+            "contact": contact,
+            "errors": [],
+            "form_data": form_data,
+            "generated_email": email_text,
+            "greeting": greeting,
+            "email_purposes": CUSTOM_EMAIL_PURPOSES,
+            "email_tones": CUSTOM_EMAIL_TONES,
+            "website_summary": website_summary,
+        },
+    )
+
+
+@app.post("/notes/{note_id}/summarise")
+def summarise_note(note_id: int, db: Session = Depends(get_db)):
+    note = (
+        db.query(models.Note)
+        .options(selectinload(models.Note.contact))
+        .filter(models.Note.id == note_id)
+        .first()
+    )
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    contact = note.contact or _ensure_contact_exists(note.contact_id, db)
+
+    try:
+        summary_text = llm.summarise_note(note, contact)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Note summarisation unavailable: {exc}") from exc
+
+    note.processed_summary = summary_text
+    db.commit()
+
+    db.refresh(note)
+    return JSONResponse({"summary": note.processed_summary or ""})

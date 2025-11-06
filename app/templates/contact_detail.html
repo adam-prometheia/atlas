@@ -2,34 +2,43 @@
 
 {% block content %}
 <div class="section-header">
-    <h1>{{ contact.name }}</h1>
     <div>
-        <a class="button secondary" href="/contacts/{{ contact.id }}/edit">Edit Contact</a>
-        <a class="button" href="/contacts/{{ contact.id }}/interactions/new">Log Interaction</a>
-        <a class="button" href="/contacts/{{ contact.id }}/notes/new">Add Note</a>
+        <h1>{{ contact.name }}</h1>
+        <div class="help-text">{{ contact.role }} · {{ contact.company_name }}</div>
+    </div>
+    <div class="action-stack">
+        <div class="action-row">
+            <button type="button" class="button" onclick="draftEmail('draft_first_email')">Draft First Email</button>
+            <button type="button" class="button" onclick="draftEmail('draft_followup')">Draft Follow-up Email</button>
+            <a class="button" href="/contacts/{{ contact.id }}/draft_custom_email">Draft Custom Email</a>
+        </div>
+        <div class="action-row secondary">
+            <a class="button secondary" href="/contacts/{{ contact.id }}/edit">Edit Contact</a>
+            <a class="button secondary" href="/contacts/{{ contact.id }}/interactions/new">Log Interaction</a>
+            <a class="button secondary" href="/contacts/{{ contact.id }}/notes/new">Add Note</a>
+        </div>
     </div>
 </div>
 
-<p><strong>Company:</strong> {{ contact.company_name }}</p>
-<p><strong>Role:</strong> {{ contact.role }}</p>
-<p><strong>Email:</strong> <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></p>
-{% if contact.linkedin_url %}
-<p><strong>LinkedIn:</strong> <a href="{{ contact.linkedin_url }}" target="_blank">{{ contact.linkedin_url }}</a></p>
-{% endif %}
-{% if contact.website_url %}
-<p><strong>Website:</strong> <a href="{{ contact.website_url }}" target="_blank">{{ contact.website_url }}</a></p>
-{% endif %}
-<p><strong>Source:</strong> {{ contact.source | replace("_", " ") | title }}</p>
-<p><strong>Status:</strong> {{ contact.status | replace("_", " ") | title }}</p>
-<p><strong>Created:</strong> {{ contact.created_at.strftime("%Y-%m-%d %H:%M") if contact.created_at else "-" }}</p>
-<p><strong>Updated:</strong> {{ contact.updated_at.strftime("%Y-%m-%d %H:%M") if contact.updated_at else "-" }}</p>
-
-<div style="margin: 1.5rem 0;">
-    <button type="button" class="button" onclick="draftEmail('draft_first_email')">Draft First Email</button>
-    <button type="button" class="button secondary" style="margin-left: 0.5rem;" onclick="draftEmail('draft_followup')">Draft Follow-up Email</button>
-    <p id="draft-status" class="empty" style="display: none; margin-top: 0.75rem;"></p>
-    <textarea id="draft-output" style="display: none; width: 100%; height: 220px; margin-top: 0.75rem;"></textarea>
+<div style="margin-top: 1.5rem;">
+    <div><strong>Email:</strong> <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></div>
+    {% if contact.linkedin_url %}
+    <div><strong>LinkedIn:</strong> <a href="{{ contact.linkedin_url }}" target="_blank">{{ contact.linkedin_url }}</a></div>
+    {% endif %}
+    {% if contact.website_url %}
+    <div><strong>Website:</strong> <a href="{{ contact.website_url }}" target="_blank">{{ contact.website_url }}</a></div>
+    {% endif %}
+    <div><strong>Source:</strong> {{ contact.source | replace("_", " ") | title }}</div>
+    <div><strong>Status:</strong> {{ contact.status | replace("_", " ") | title }}</div>
+    <div><strong>Created:</strong> {{ contact.created_at.strftime("%Y-%m-%d %H:%M") if contact.created_at else "-" }}</div>
+    <div><strong>Updated:</strong> {{ contact.updated_at.strftime("%Y-%m-%d %H:%M") if contact.updated_at else "-" }}</div>
 </div>
+
+<div class="draft-output" id="draft-output-container" style="display: none;">
+    <p id="draft-status" class="help-text"></p>
+    <textarea id="draft-output" style="width: 100%; height: 220px;"></textarea>
+</div>
+<p id="draft-status-inline" class="empty" style="display: none; margin-top: 1rem;"></p>
 
 <div class="section-header">
     <h2>Interactions</h2>
@@ -44,6 +53,7 @@
             <th>Summary</th>
             <th>Next Action</th>
             <th>Due</th>
+            <th>Outcome</th>
             <th>Actions</th>
         </tr>
     </thead>
@@ -52,13 +62,22 @@
         <tr>
             <td>{{ interaction.timestamp.strftime("%Y-%m-%d %H:%M") if interaction.timestamp else "-" }}</td>
             <td>{{ interaction.type | replace("_", " ") | title }}</td>
-            <td>{{ interaction.summary }}</td>
+            <td><div class="preformatted interaction-summary">{{ interaction.summary }}</div></td>
             <td>{{ interaction.next_action or "-" }}</td>
             <td>{{ interaction.next_action_due.strftime("%Y-%m-%d") if interaction.next_action_due else "-" }}</td>
             <td>
-                <form method="post" action="/interactions/{{ interaction.id }}/delete">
-                    <button type="submit" class="button secondary">Delete</button>
-                </form>
+                {{ interaction.outcome.replace("_", " ") | title }}
+                {% if interaction.outcome_notes %}
+                    <div class="help-text">{{ interaction.outcome_notes }}</div>
+                {% endif %}
+            </td>
+            <td>
+                <div class="action-row" style="gap: 0.35rem; flex-wrap: wrap;">
+                    <a class="button secondary" href="/interactions/{{ interaction.id }}/edit">Edit</a>
+                    <form method="post" action="/interactions/{{ interaction.id }}/delete" style="margin: 0;">
+                        <button type="submit" class="button secondary">Delete</button>
+                    </form>
+                </div>
             </td>
         </tr>
     {% endfor %}
@@ -70,28 +89,50 @@
 
 <div class="section-header">
     <h2>Notes</h2>
-    <span></span>
+    <div class="toggle-group" role="group">
+        <button type="button" data-mode="raw">Raw</button>
+        <button type="button" data-mode="structured">Structured</button>
+    </div>
 </div>
 {% if contact.notes %}
-<table>
+<table id="notes-table">
     <thead>
         <tr>
             <th>Date</th>
-            <th>Raw Notes</th>
-            <th>Processed Summary</th>
+            <th class="note-raw-header">Raw Notes</th>
+            <th class="note-structured-header">Structured Summary</th>
             <th>Actions</th>
         </tr>
     </thead>
     <tbody>
     {% for note in contact.notes %}
-        <tr>
+        {% set summary = (note.processed_summary or "").strip() %}
+        {% set has_structured = summary and summary != "-" %}
+        <tr data-note-id="{{ note.id }}">
             <td>{{ note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else "-" }}</td>
-            <td><div class="preformatted">{{ note.raw_notes }}</div></td>
-            <td>{{ note.processed_summary or "-" }}</td>
+            <td class="note-raw">
+                <div class="preformatted">{{ note.raw_notes }}</div>
+            </td>
+            <td class="note-structured" data-has-content="{{ 'true' if has_structured else 'false' }}">
+                {% if has_structured %}
+                    <div class="preformatted">{{ note.processed_summary }}</div>
+                {% else %}
+                    <div class="empty">No structured summary yet.</div>
+                {% endif %}
+            </td>
             <td>
-                <form method="post" action="/notes/{{ note.id }}/delete">
-                    <button type="submit" class="button secondary">Delete</button>
-                </form>
+                <div class="action-stack" style="margin-top: 0;">
+                    <div class="action-row" style="gap: 0.35rem; flex-wrap: wrap;">
+                        <a class="button secondary" href="/notes/{{ note.id }}/edit">Edit</a>
+                        <button type="button" class="button secondary" data-note-id="{{ note.id }}">
+                            {% if has_structured %}Refresh structured summary{% else %}Generate structured summary{% endif %}
+                        </button>
+                        <form method="post" action="/notes/{{ note.id }}/delete" style="margin: 0;">
+                            <button type="submit" class="button secondary">Delete</button>
+                        </form>
+                    </div>
+                    <div class="help-text note-status" style="display: none;"></div>
+                </div>
             </td>
         </tr>
     {% endfor %}
@@ -102,26 +143,144 @@
 {% endif %}
 
 <script>
+    const rawToggle = document.querySelector('.toggle-group button[data-mode="raw"]');
+    const structuredToggle = document.querySelector('.toggle-group button[data-mode="structured"]');
+    const notesTable = document.getElementById('notes-table');
+    let currentNotesMode = 'raw';
+
+    function setNotesView(mode) {
+        currentNotesMode = mode;
+        const showStructured = mode === 'structured';
+        document.querySelectorAll('.note-raw').forEach((cell) => {
+            cell.toggleAttribute('hidden', showStructured);
+        });
+        document.querySelectorAll('.note-structured').forEach((cell) => {
+            cell.toggleAttribute('hidden', !showStructured);
+        });
+        const rawHeader = document.querySelector('.note-raw-header');
+        const structuredHeader = document.querySelector('.note-structured-header');
+        if (rawHeader) rawHeader.toggleAttribute('hidden', showStructured);
+        if (structuredHeader) structuredHeader.toggleAttribute('hidden', !showStructured);
+        if (rawToggle) {
+            rawToggle.classList.toggle('active', mode === 'raw');
+        }
+        if (structuredToggle) {
+            structuredToggle.classList.toggle('active', mode === 'structured');
+        }
+    }
+
+    function determineInitialNotesMode() {
+        if (!notesTable) {
+            return 'raw';
+        }
+        const anyStructured = Array.from(notesTable.querySelectorAll('.note-structured'))
+            .some((cell) => cell.dataset.hasContent === 'true');
+        return anyStructured ? 'structured' : 'raw';
+    }
+
     async function draftEmail(endpoint) {
-        const statusEl = document.getElementById("draft-status");
-        const outputEl = document.getElementById("draft-output");
-        statusEl.style.display = "block";
-        statusEl.textContent = "Generating email draft...";
-        outputEl.style.display = "none";
+        const statusInline = document.getElementById('draft-status-inline');
+        const container = document.getElementById('draft-output-container');
+        const textarea = document.getElementById('draft-output');
+        const statusText = document.getElementById('draft-status');
+
+        statusInline.style.display = 'none';
+        container.style.display = 'block';
+        statusText.textContent = 'Generating email draft...';
+
         try {
-            const response = await fetch(`/contacts/{{ contact.id }}/${endpoint}`, {
-                method: "POST"
-            });
+            const response = await fetch(`/contacts/{{ contact.id }}/${endpoint}`, { method: 'POST' });
             if (!response.ok) {
                 throw new Error(`Server responded with ${response.status}`);
             }
             const data = await response.json();
-            outputEl.value = data.email || "";
-            outputEl.style.display = "block";
-            statusEl.textContent = "Draft ready below. Feel free to edit before sending.";
+            textarea.value = data.email || '';
+            statusText.textContent = 'Draft ready below. Edit freely before sending.';
         } catch (error) {
-            statusEl.textContent = `Unable to generate draft: ${error.message}`;
+            container.style.display = 'none';
+            statusInline.style.display = 'block';
+            statusInline.textContent = `Unable to generate draft: ${error.message}`;
         }
+    }
+
+    async function summariseNote(noteId) {
+        const row = document.querySelector(`[data-note-id="${noteId}"]`);
+        if (!row) return;
+        const statusEl = row.querySelector('.note-status');
+        const structuredCell = row.querySelector('.note-structured');
+        const button = row.querySelector('button[data-note-id]');
+
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.textContent = 'Generating structured summary...';
+        }
+        if (button) {
+            button.disabled = true;
+        }
+
+        try {
+            const response = await fetch(`/notes/${noteId}/summarise`, { method: 'POST' });
+            if (!response.ok) {
+                throw new Error(`Server responded with ${response.status}`);
+            }
+            const data = await response.json();
+            const summary = data.summary || '';
+            structuredCell.dataset.hasContent = summary.trim() ? 'true' : 'false';
+            if (summary.trim()) {
+                const container = document.createElement('div');
+                container.className = 'preformatted';
+                container.textContent = summary;
+                structuredCell.innerHTML = '';
+                structuredCell.appendChild(container);
+                if (button) {
+                    button.textContent = 'Refresh structured summary';
+                }
+            } else {
+                const emptyDiv = document.createElement('div');
+                emptyDiv.className = 'empty';
+                emptyDiv.textContent = 'No structured summary yet.';
+                structuredCell.innerHTML = '';
+                structuredCell.appendChild(emptyDiv);
+                if (button) {
+                    button.textContent = 'Generate structured summary';
+                }
+            }
+            if (statusEl) {
+                statusEl.textContent = 'Updated.';
+                setTimeout(() => {
+                    statusEl.style.display = 'none';
+                }, 2500);
+            }
+            setNotesView(currentNotesMode);
+        } catch (error) {
+            if (statusEl) {
+                statusEl.textContent = `Unable to summarise: ${error.message}`;
+            }
+        } finally {
+            if (button) {
+                button.disabled = false;
+            }
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const initialMode = determineInitialNotesMode();
+        setNotesView(initialMode);
+
+        // attach click handlers for note summarise buttons that carry data-note-id
+        document.querySelectorAll('button[data-note-id]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const id = btn.dataset.noteId;
+                if (id) summariseNote(id);
+            });
+        });
+    });
+
+    if (rawToggle) {
+        rawToggle.addEventListener('click', () => setNotesView('raw'));
+    }
+    if (structuredToggle) {
+        structuredToggle.addEventListener('click', () => setNotesView('structured'));
     }
 </script>
 {% endblock %}

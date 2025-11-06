@@ -33,16 +33,20 @@
     <label for="source">Source</label>
     <select id="source" name="source" required>
         {% set selected_source = form_data.source if form_data else '' %}
-        {% for option in ["referral", "cold_linkedin", "event", "other"] %}
-            <option value="{{ option }}" {% if option == selected_source %}selected{% endif %}>{{ option | replace("_", " ") | title }}</option>
+        {% for option in contact_sources %}
+            <option value="{{ option }}" {% if option == selected_source %}selected{% endif %}>
+                {{ option | replace("_", " ") | title }}
+            </option>
         {% endfor %}
     </select>
 
     <label for="status">Status</label>
     <select id="status" name="status" required>
         {% set selected_status = form_data.status if form_data else '' %}
-        {% for option in ["prospect", "meeting_booked", "proposal_sent", "client"] %}
-            <option value="{{ option }}" {% if option == selected_status %}selected{% endif %}>{{ option | replace("_", " ") | title }}</option>
+        {% for option in contact_statuses %}
+            <option value="{{ option }}" {% if option == selected_status %}selected{% endif %}>
+                {{ option | replace("_", " ") | title }}
+            </option>
         {% endfor %}
     </select>
 

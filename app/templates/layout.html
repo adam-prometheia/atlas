@@ -4,28 +4,111 @@
     <meta charset="UTF-8">
     <title>ATLAS CRM</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f7f7f7; }
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f3f4f6; color: #111827; }
         header { background: #1e3a8a; color: #fff; padding: 1rem 2rem; }
-        main { padding: 2rem; }
+        main { padding: 2rem 1.5rem 3rem; }
         nav a { color: #fff; margin-right: 1rem; text-decoration: none; font-weight: bold; }
-        .container { background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
-        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-        th, td { padding: 0.75rem; border-bottom: 1px solid #e5e7eb; text-align: left; }
-        th { background: #f3f4f6; }
-        a.button, button, input[type="submit"] { background: #2563eb; color: #fff; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
-        a.button.secondary { background: #6b7280; }
-        form label { display: block; margin-top: 1rem; font-weight: bold; }
-        form input[type="text"], form input[type="email"], form input[type="date"], form textarea, form select { width: 100%; padding: 0.5rem; margin-top: 0.25rem; border: 1px solid #d1d5db; border-radius: 4px; }
-        .errors { background: #fee2e2; color: #991b1b; padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem; }
-        .section-header { display: flex; justify-content: space-between; align-items: center; margin-top: 2rem; }
+        .container {
+            background: #fff;
+            padding: 1.75rem 2rem;
+            border-radius: 12px;
+            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.95rem; }
+        th, td {
+            padding: 0.75rem;
+            border-bottom: 1px solid #e5e7eb;
+            text-align: left;
+            vertical-align: top;
+        }
+        th { background: #f3f4f6; font-weight: 600; }
+        tbody tr:nth-child(even) { background: #f9fafb; }
+        tbody tr:hover { background: #eef2ff; }
+        a.button, button, input[type="submit"] {
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            padding: 0.55rem 1.1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-weight: 600;
+        }
+        a.button.secondary,
+        button.secondary,
+        input[type="submit"].secondary {
+            background: #6b7280;
+        }
+        form label { display: block; margin-top: 1rem; font-weight: 600; }
+        form input[type="text"],
+        form input[type="email"],
+        form input[type="date"],
+        form textarea,
+        form select {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            margin-top: 0.25rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 0.95rem;
+        }
+        .errors {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-top: 2rem;
+        }
         .empty { color: #6b7280; font-style: italic; }
         .help-text {
             margin: 0.25rem 0 0.5rem;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             color: #4b5563;
         }
         .preformatted {
             white-space: pre-wrap;
+            word-break: break-word;
+            font-family: inherit;
+        }
+        .action-stack { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1rem; }
+        .action-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+        .action-row.secondary a.button { background: #6b7280; }
+        .draft-output { margin-top: 1rem; }
+        .toggle-group {
+            display: inline-flex;
+            border: 1px solid #d1d5db;
+            border-radius: 999px;
+            overflow: hidden;
+            background: #f9fafb;
+        }
+        .toggle-group button {
+            border: none;
+            background: transparent;
+            color: #374151;
+            padding: 0.45rem 1rem;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .toggle-group button.active {
+            background: #1e3a8a;
+            color: #fff;
+        }
+        .note-structured[hidden],
+        .note-raw[hidden] {
+            display: none;
         }
     </style>
 </head>
@@ -34,6 +117,7 @@
         <nav>
             <a href="/contacts">Contacts</a>
             <a href="/next-actions">Next Actions</a>
+            <a href="/metrics/outcomes">Outcomes</a>
         </nav>
     </header>
     <main>

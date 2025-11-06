@@ -15,16 +15,18 @@
             <th>Summary</th>
             <th>Next Action</th>
             <th>Due Date</th>
+            <th>Outcome</th>
         </tr>
     </thead>
     <tbody>
     {% for interaction in interactions %}
         <tr>
             <td><a href="/contacts/{{ interaction.contact.id }}">{{ interaction.contact.name }}</a></td>
-            <td>{{ interaction.type | title }}</td>
-            <td>{{ interaction.summary }}</td>
+            <td>{{ interaction.type | replace("_", " ") | title }}</td>
+            <td><div class="preformatted interaction-summary">{{ interaction.summary }}</div></td>
             <td>{{ interaction.next_action or "-" }}</td>
             <td>{{ interaction.next_action_due.strftime("%Y-%m-%d") if interaction.next_action_due else "-" }}</td>
+            <td>{{ interaction.outcome.replace("_", " ") | title }}</td>
         </tr>
     {% endfor %}
     </tbody>

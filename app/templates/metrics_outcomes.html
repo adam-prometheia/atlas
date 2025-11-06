@@ -1,0 +1,29 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="section-header">
+    <h1>Interaction Outcomes</h1>
+    <span></span>
+</div>
+
+{% if metrics %}
+<table>
+    <thead>
+        <tr>
+            <th>Outcome</th>
+            <th>Count</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for row in metrics %}
+        <tr>
+            <td>{{ row.outcome.replace("_", " ") | title }}</td>
+            <td>{{ row.count }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+    <p class="empty">No interactions logged yet.</p>
+{% endif %}
+{% endblock %}

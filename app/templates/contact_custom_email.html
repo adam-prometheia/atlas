@@ -1,0 +1,91 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="section-header">
+    <h1>Custom Email for {{ contact.name }}</h1>
+    <span></span>
+</div>
+
+<p class="help-text">Use this when you have a specific purpose or tone in mind. The draft will always echo Adam's “forethought first, start small → prove value → scale what works” stance.</p>
+
+{% if website_summary %}
+<details style="margin: 1rem 0;">
+    <summary><strong>Website snapshot</strong></summary>
+    <div class="preformatted" style="margin-top: 0.5rem;">{{ website_summary }}</div>
+</details>
+{% endif %}
+
+{% if errors and errors|length %}
+    <div class="errors">
+        <ul>
+            {% for error in errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+<form method="post" action="/contacts/{{ contact.id }}/draft_custom_email">
+    <label for="purpose">Purpose</label>
+    <select id="purpose" name="purpose" required>
+        {% set selected_purpose = form_data.purpose if form_data else 'intro' %}
+        {% for option, label in email_purposes %}
+            <option value="{{ option }}" {% if option == selected_purpose %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="tone">Tone</label>
+    <select id="tone" name="tone" required>
+        {% set selected_tone = form_data.tone if form_data else 'warm' %}
+        {% for option, label in email_tones %}
+            <option value="{{ option }}" {% if option == selected_tone %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="brief">Your brief / key intents</label>
+    <p class="help-text">Spell out what Adam should cover. Keep it concrete; any gaps will be flagged.</p>
+    <textarea id="brief" name="brief" rows="5" required>{{ form_data.brief if form_data else '' }}</textarea>
+
+    <label for="context">Additional context (optional)</label>
+    <p class="help-text">Recent interactions, meeting goals, or nuances we should respect.</p>
+    <textarea id="context" name="context" rows="4">{{ form_data.context if form_data else '' }}</textarea>
+
+    <div class="help-text" style="margin-top: 0.75rem;">
+        Greeting that will be used: <strong>{{ greeting }}</strong>
+    </div>
+
+    <div style="margin-top: 1.5rem;">
+        <input type="submit" value="Draft Custom Email">
+        <a class="button secondary" href="/contacts/{{ contact.id }}">Back to contact</a>
+    </div>
+</form>
+
+{% if generated_email %}
+    <div class="section-header" style="margin-top: 2.5rem;">
+        <h2>Generated Draft</h2>
+        <button type="button" class="button secondary" onclick="copyDraft()">Copy draft to clipboard</button>
+    </div>
+    <textarea id="generated-email-text" style="width: 100%; height: 260px;">{{ generated_email }}</textarea>
+    <p id="copy-status" class="help-text" style="display: none;"></p>
+{% endif %}
+
+<script>
+    function copyDraft() {
+        const textArea = document.getElementById('generated-email-text');
+        const status = document.getElementById('copy-status');
+        if (!textArea) return;
+        textArea.select();
+        try {
+            const copied = document.execCommand('copy');
+            if (copied) {
+                status.textContent = 'Draft copied to clipboard.';
+                status.style.display = 'block';
+                setTimeout(() => { status.style.display = 'none'; }, 2000);
+            }
+        } catch (error) {
+            status.textContent = 'Copy failed. Select the text and copy manually.';
+            status.style.display = 'block';
+        }
+    }
+</script>
+{% endblock %}

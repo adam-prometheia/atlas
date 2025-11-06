@@ -6,6 +6,30 @@
     <a class="button" href="/contacts/new">Add Contact</a>
 </div>
 
+<form method="get" style="margin-top: 1rem; margin-bottom: 1rem; display: flex; gap: 1rem; align-items: flex-end;">
+    <div>
+        <label for="status_filter">Status</label>
+        {% set current_status = status or '' %}
+        <select id="status_filter" name="status">
+            <option value="">All</option>
+            {% for option in contact_statuses %}
+                <option value="{{ option }}" {% if option == current_status %}selected{% endif %}>
+                    {{ option.replace("_", " ") | title }}
+                </option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div>
+        <label for="q">Search</label>
+        <input type="text" id="q" name="q" value="{{ q or '' }}" placeholder="Name or company">
+    </div>
+
+    <div>
+        <input type="submit" value="Filter">
+    </div>
+</form>
+
 {% if contacts %}
 <table>
     <thead>
@@ -24,8 +48,8 @@
             <td><a href="/contacts/{{ contact.id }}">{{ contact.name }}</a></td>
             <td>{{ contact.company_name }}</td>
             <td>{{ contact.role }}</td>
-            <td>{{ contact.status }}</td>
-            <td>{{ contact.source }}</td>
+            <td>{{ contact.status.replace("_", " ") | title }}</td>
+            <td>{{ contact.source.replace("_", " ") | title }}</td>
             <td>{{ contact.created_at.strftime("%Y-%m-%d") if contact.created_at else "-" }}</td>
         </tr>
     {% endfor %}

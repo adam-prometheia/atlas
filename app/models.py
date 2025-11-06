@@ -49,6 +49,8 @@ class Interaction(Base):
     summary = Column(Text, nullable=False)
     next_action = Column(Text, nullable=True)
     next_action_due = Column(Date, nullable=True)
+    outcome = Column(String(50), nullable=False, default="pending")
+    outcome_notes = Column(Text, nullable=True)
 
     contact = relationship("Contact", back_populates="interactions")
 
