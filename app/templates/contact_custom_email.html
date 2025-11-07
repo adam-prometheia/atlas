@@ -1,6 +1,17 @@
 {% extends "layout.html" %}
 
 {% block content %}
+<style>
+    .checkbox-row {
+        display: flex;
+        gap: 0.5rem;
+        align-items: flex-start;
+        margin: 0.35rem 0;
+    }
+    .checkbox-row input {
+        margin-top: 0.25rem;
+    }
+</style>
 <div class="section-header">
     <h1>Custom Email for {{ contact.name }}</h1>
     <span></span>
@@ -52,6 +63,70 @@
 
     <div class="help-text" style="margin-top: 0.75rem;">
         Greeting that will be used: <strong>{{ greeting }}</strong>
+    </div>
+
+    {% if interactions %}
+    <fieldset style="margin-top: 1.5rem;">
+        <legend><strong>Include logged interactions as context (optional)</strong></legend>
+        <p class="help-text">
+            Select any interactions you want the AI to see when drafting this email.
+        </p>
+        {% for interaction in interactions %}
+        <label class="checkbox-row">
+            <input
+                type="checkbox"
+                name="interaction_ids"
+                value="{{ interaction.id }}"
+                {% if selected_interaction_ids and interaction.id in selected_interaction_ids %}checked{% endif %}
+            >
+            {{ interaction.timestamp.strftime('%Y-%m-%d') if interaction.timestamp else '(undated)' }} – {{ interaction.type.replace('_', ' ') }} – {{ interaction.summary[:120] }}
+        </label>
+        {% endfor %}
+    </fieldset>
+    {% endif %}
+
+    {% if notes %}
+    <fieldset style="margin-top: 1rem;">
+        <legend><strong>Include notes as context (optional)</strong></legend>
+        <p class="help-text">
+            Select any meeting notes you want the AI to consider.
+        </p>
+        {% for note in notes %}
+        <label class="checkbox-row">
+            <input
+                type="checkbox"
+                name="note_ids"
+                value="{{ note.id }}"
+                {% if selected_note_ids and note.id in selected_note_ids %}checked{% endif %}
+            >
+            {{ note.meeting_date }} – {{ (note.processed_summary or note.raw_notes)[:120] }}
+        </label>
+        {% endfor %}
+    </fieldset>
+    {% endif %}
+
+    {% if selected_interaction_preview or selected_note_preview %}
+    <details style="margin-top: 1rem;">
+        <summary><strong>Selected context that will feed the draft</strong></summary>
+        <div class="preformatted" style="margin-top: 0.5rem;">
+{{ selected_interaction_preview }}
+{% if selected_note_preview %}
+{% if selected_interaction_preview %}
+
+{% endif %}
+{{ selected_note_preview }}
+{% endif %}
+        </div>
+    </details>
+    {% endif %}
+
+    <div class="help-text" style="margin-top: 1rem;">
+        Draft reminder:
+        <ul style="margin: 0.25rem 0 0.25rem 1.25rem; padding: 0;">
+            <li>Your brief stays primary.</li>
+            <li>Selected interactions/notes + website snapshot only ground the draft.</li>
+            <li>Outputs remain drafts for you to edit—never auto-sent.</li>
+        </ul>
     </div>
 
     <div style="margin-top: 1.5rem;">

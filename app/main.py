@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -71,6 +71,40 @@ def _build_greeting(contact: models.Contact) -> str:
     if contact.name:
         return f"Hi {contact.name},"
     return "Hi there,"
+
+
+def _shorten_for_context(value: Optional[str], *, limit: int = 160, placeholder: str = "(unclear)") -> str:
+    if not value:
+        return placeholder
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3].rstrip() + "..."
+
+
+def _format_selected_interaction_lines(interactions: Sequence[models.Interaction]) -> str:
+    lines = []
+    for interaction in interactions:
+        timestamp = interaction.timestamp.strftime("%Y-%m-%d") if interaction.timestamp else "(undated)"
+        interaction_type = (interaction.type or "interaction").replace("_", " ")
+        outcome = interaction.outcome or "(unclear)"
+        summary = _shorten_for_context(interaction.summary, limit=150)
+        lines.append(f"- {timestamp}: {interaction_type} | outcome={outcome} | {summary}")
+    return "\n".join(lines)
+
+
+def _format_selected_note_lines(notes: Sequence[models.Note]) -> str:
+    lines = []
+    for note in notes:
+        meeting_date = note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else "(undated)"
+        structured = note.processed_summary.strip() if note.processed_summary else ""
+        structured = _shorten_for_context(structured, limit=150, placeholder="") if structured else ""
+        raw_excerpt = _shorten_for_context(note.raw_notes, limit=140)
+        if structured:
+            lines.append(f"- {meeting_date}: structured: {structured} / raw: {raw_excerpt}")
+        else:
+            lines.append(f"- {meeting_date}: raw: {raw_excerpt}")
+    return "\n".join(lines)
 
 
 def _ensure_contact_exists(contact_id: int, db: Session) -> models.Contact:
@@ -738,6 +772,18 @@ def custom_email_form(contact_id: int, request: Request, db: Session = Depends(g
     website_summary = _try_fetch_website_summary(contact)
     greeting = _build_greeting(contact)
     form_defaults = DEFAULT_CUSTOM_EMAIL_FORM.copy()
+    interactions = (
+        db.query(models.Interaction)
+        .filter(models.Interaction.contact_id == contact.id)
+        .order_by(models.Interaction.timestamp.desc())
+        .all()
+    )
+    notes = (
+        db.query(models.Note)
+        .filter(models.Note.contact_id == contact.id)
+        .order_by(models.Note.meeting_date.desc())
+        .all()
+    )
     return templates.TemplateResponse(
         "contact_custom_email.html",
         {
@@ -750,6 +796,12 @@ def custom_email_form(contact_id: int, request: Request, db: Session = Depends(g
             "email_purposes": CUSTOM_EMAIL_PURPOSES,
             "email_tones": CUSTOM_EMAIL_TONES,
             "website_summary": website_summary,
+            "interactions": interactions,
+            "notes": notes,
+            "selected_interaction_ids": [],
+            "selected_note_ids": [],
+            "selected_interaction_preview": "",
+            "selected_note_preview": "",
         },
     )
 
@@ -762,11 +814,34 @@ def generate_custom_email(
     tone: str = Form(...),
     brief: str = Form(...),
     context: Optional[str] = Form(None),
+    interaction_ids: List[int] = Form([]),
+    note_ids: List[int] = Form([]),
     db: Session = Depends(get_db),
 ):
     contact = _ensure_contact_exists(contact_id, db)
     greeting = _build_greeting(contact)
     website_summary = _try_fetch_website_summary(contact)
+    interactions = (
+        db.query(models.Interaction)
+        .filter(models.Interaction.contact_id == contact.id)
+        .order_by(models.Interaction.timestamp.desc())
+        .all()
+    )
+    notes = (
+        db.query(models.Note)
+        .filter(models.Note.contact_id == contact.id)
+        .order_by(models.Note.meeting_date.desc())
+        .all()
+    )
+
+    interaction_id_set = set(interaction_ids or [])
+    note_id_set = set(note_ids or [])
+    selected_interactions = [interaction for interaction in interactions if interaction.id in interaction_id_set]
+    selected_notes = [note for note in notes if note.id in note_id_set]
+    selected_interaction_ids = [interaction.id for interaction in selected_interactions]
+    selected_note_ids = [note.id for note in selected_notes]
+    selected_interaction_preview = _format_selected_interaction_lines(selected_interactions)
+    selected_note_preview = _format_selected_note_lines(selected_notes)
 
     errors = []
     valid_purposes = {value for value, _ in CUSTOM_EMAIL_PURPOSES}
@@ -785,20 +860,26 @@ def generate_custom_email(
         "context": context or "",
     }
 
+    base_context = {
+        "request": request,
+        "contact": contact,
+        "greeting": greeting,
+        "email_purposes": CUSTOM_EMAIL_PURPOSES,
+        "email_tones": CUSTOM_EMAIL_TONES,
+        "website_summary": website_summary,
+        "interactions": interactions,
+        "notes": notes,
+        "selected_interaction_ids": selected_interaction_ids,
+        "selected_note_ids": selected_note_ids,
+        "selected_interaction_preview": selected_interaction_preview,
+        "selected_note_preview": selected_note_preview,
+        "form_data": form_data,
+    }
+
     if errors:
         return templates.TemplateResponse(
             "contact_custom_email.html",
-            {
-                "request": request,
-                "contact": contact,
-                "errors": errors,
-                "form_data": form_data,
-                "generated_email": None,
-                "greeting": greeting,
-                "email_purposes": CUSTOM_EMAIL_PURPOSES,
-                "email_tones": CUSTOM_EMAIL_TONES,
-                "website_summary": website_summary,
-            },
+            {**base_context, "errors": errors, "generated_email": None},
         )
 
     email_text: Optional[str] = None
@@ -811,6 +892,8 @@ def generate_custom_email(
             brief=brief,
             additional_context=context,
             website_summary=website_summary,
+            selected_interactions=selected_interactions,
+            selected_notes=selected_notes,
         )
     except RuntimeError as exc:
         errors.append(f"Unable to generate custom draft: {exc}")
@@ -820,32 +903,12 @@ def generate_custom_email(
     if errors:
         return templates.TemplateResponse(
             "contact_custom_email.html",
-            {
-                "request": request,
-                "contact": contact,
-                "errors": errors,
-                "form_data": form_data,
-                "generated_email": None,
-                "greeting": greeting,
-                "email_purposes": CUSTOM_EMAIL_PURPOSES,
-                "email_tones": CUSTOM_EMAIL_TONES,
-                "website_summary": website_summary,
-            },
+            {**base_context, "errors": errors, "generated_email": None},
         )
 
     return templates.TemplateResponse(
         "contact_custom_email.html",
-        {
-            "request": request,
-            "contact": contact,
-            "errors": [],
-            "form_data": form_data,
-            "generated_email": email_text,
-            "greeting": greeting,
-            "email_purposes": CUSTOM_EMAIL_PURPOSES,
-            "email_tones": CUSTOM_EMAIL_TONES,
-            "website_summary": website_summary,
-        },
+        {**base_context, "errors": [], "generated_email": email_text},
     )
 
 
