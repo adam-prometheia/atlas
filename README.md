@@ -10,7 +10,7 @@ ATLAS is a lightweight, self-hosted BD aide Adam Phillips uses to stay on top of
 - **Interaction logging** - Email/LinkedIn/call/meeting/note entries with summaries, outcomes, optional outcome notes, next actions, and due dates (new entries default to seven days out). Full timeline appears on the contact detail page with edit/delete controls.
 - **Notes workspace** - Store raw notes plus optional processed summaries per meeting date. Contact pages include a Raw/Structured toggle that defaults to Structured whenever at least one summary exists.
 - **Structured note summaries** - "Generate / Refresh structured summary" buttons run the BD_NOTES_SUMMARISER agent inline and overwrite the stored processed summary.
-- **Next Actions board** - `/next-actions` shows every next action due today or overdue, grouped with the originating interaction and linked back to the contact.
+- **Next Actions board** - `/next-actions` shows every next action due today or overdue, grouped with the originating interaction and linked back to the contact, with a Completed button to archive items once handled.
 - **Outcomes dashboard** - `/metrics/outcomes` aggregates interaction outcomes (pending, no reply, positive variants, negatives) for quick pipeline health checks.
 - **Contact list filters** - `/contacts` filters by status and keyword search across name + company for quick segmentation.
 - **Website intelligence** - The website analyser fetches the contact's homepage and produces "What they do" plus "Credible AI pilots" bullets used across drafting workflows and surfaced on the custom email page.
@@ -58,7 +58,7 @@ ATLAS is a lightweight, self-hosted BD aide Adam Phillips uses to stay on top of
 
 ### Metrics & next actions
 
-- **Next Actions board (`/next-actions`):** Lists every due or overdue next action sorted by due date with links back to the originating contact for quick follow-up.
+- **Next Actions board (`/next-actions`):** Lists every due or overdue next action sorted by due date with links back to the originating contact and a Completed button that archives the task (stored alongside the originating interaction) so it drops off the board once done.
 - **Outcomes metrics (`/metrics/outcomes`):** Simple aggregation of interaction outcomes to show how outreach is landing (pending, positive meetings/intros, negative responses, etc.).
 
 ---

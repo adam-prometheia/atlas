@@ -537,6 +537,29 @@ def delete_interaction(interaction_id: int, request: Request, db: Session = Depe
     )
 
 
+@app.post("/interactions/{interaction_id}/archive-next-action")
+def archive_next_action(
+    interaction_id: int,
+    request: Request,
+    return_to: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    interaction = _get_interaction_with_contact(interaction_id, db)
+    if interaction.next_action or interaction.next_action_due:
+        archived = models.ArchivedNextAction(
+            interaction_id=interaction.id,
+            next_action=interaction.next_action,
+            next_action_due=interaction.next_action_due,
+        )
+        db.add(archived)
+        interaction.next_action = None
+        interaction.next_action_due = None
+        db.commit()
+
+    redirect_target = return_to if return_to and return_to.startswith("/") else request.url_for("list_next_actions")
+    return RedirectResponse(url=redirect_target, status_code=303)
+
+
 @app.get("/contacts/{contact_id}/notes/new")
 def new_note_form(contact_id: int, request: Request, db: Session = Depends(get_db)):
     contact = _ensure_contact_exists(contact_id, db)

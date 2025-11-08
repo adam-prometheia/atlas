@@ -16,6 +16,7 @@
             <th>Next Action</th>
             <th>Due Date</th>
             <th>Outcome</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -27,6 +28,12 @@
             <td>{{ interaction.next_action or "-" }}</td>
             <td>{{ interaction.next_action_due.strftime("%Y-%m-%d") if interaction.next_action_due else "-" }}</td>
             <td>{{ interaction.outcome.replace("_", " ") | title }}</td>
+            <td>
+                <form method="post" action="/interactions/{{ interaction.id }}/archive-next-action" style="margin: 0;">
+                    <input type="hidden" name="return_to" value="{{ request.url.path }}">
+                    <button type="submit" class="button secondary">Completed</button>
+                </form>
+            </td>
         </tr>
     {% endfor %}
     </tbody>

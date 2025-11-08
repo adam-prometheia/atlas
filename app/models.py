@@ -65,3 +65,15 @@ class Note(Base):
     processed_summary = Column(Text, nullable=True)
 
     contact = relationship("Contact", back_populates="notes")
+
+
+class ArchivedNextAction(Base):
+    __tablename__ = "archived_next_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    interaction_id = Column(Integer, ForeignKey("interactions.id", ondelete="CASCADE"), nullable=False)
+    archived_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    next_action = Column(Text, nullable=True)
+    next_action_due = Column(Date, nullable=True)
+
+    interaction = relationship("Interaction")
