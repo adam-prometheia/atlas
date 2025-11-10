@@ -34,6 +34,45 @@
     <div><strong>Updated:</strong> {{ contact.updated_at.strftime("%Y-%m-%d %H:%M") if contact.updated_at else "-" }}</div>
 </div>
 
+{% if suggestions_enabled %}
+<div class="section-header" style="margin-top: 1.5rem;">
+    <h2>Next Action Assistant</h2>
+    <span></span>
+</div>
+<div class="card" style="padding: 1rem;">
+    <div id="suggestion-error" class="alert" style="display: none; margin-bottom: 0.75rem;">
+        <span id="suggestion-error-message"></span>
+        <button type="button" class="button secondary" id="suggestion-retry" style="margin-left: 0.5rem;">Retry</button>
+    </div>
+    <div class="action-row" style="gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+        <button type="button" class="button" id="suggest-next-action">Suggest Next Action</button>
+        <button type="button" class="button secondary" id="apply-suggestion" disabled>Create Next Action from suggestion</button>
+        <span id="suggestion-status" class="help-text"></span>
+    </div>
+    <div id="next-action-suggestion" style="display: none; margin-top: 1rem;">
+        <p><strong>Type:</strong> <span id="suggestion-type">-</span></p>
+        <p><strong>Title:</strong> <span id="suggestion-title">-</span></p>
+        <p><strong>Description:</strong> <span id="suggestion-description">-</span></p>
+        <p><strong>Suggested due date:</strong> <span id="suggestion-due-date">-</span></p>
+        <p><strong>Confidence:</strong> <span id="suggestion-confidence">-</span></p>
+        <p><strong>Notes for Adam:</strong></p>
+        <div id="suggestion-notes" class="preformatted" style="white-space: pre-wrap; margin-bottom: 1rem;">-</div>
+        <div style="margin-bottom: 0.5rem;">
+            <label for="suggestion-email-subject"><strong>Proposed subject</strong></label>
+            <input type="text" id="suggestion-email-subject" style="width: 100%; margin-top: 0.25rem;" readonly>
+        </div>
+        <div style="margin-bottom: 0.75rem;">
+            <label for="suggestion-email-body"><strong>Proposed email draft</strong></label>
+            <textarea id="suggestion-email-body" style="width: 100%; height: 160px; margin-top: 0.25rem;" readonly></textarea>
+        </div>
+        <div class="action-row" style="gap: 0.5rem; flex-wrap: wrap;">
+            <a class="button secondary" href="/contacts/{{ contact.id }}/interactions/new">Log your own next action</a>
+            <button type="button" class="button secondary" id="copy-suggestion-email">Copy email draft</button>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div class="draft-output" id="draft-output-container" style="display: none;">
     <p id="draft-status" class="help-text"></p>
     <textarea id="draft-output" style="width: 100%; height: 220px;"></textarea>
@@ -146,7 +185,26 @@
     const rawToggle = document.querySelector('.toggle-group button[data-mode="raw"]');
     const structuredToggle = document.querySelector('.toggle-group button[data-mode="structured"]');
     const notesTable = document.getElementById('notes-table');
+    const suggestionButton = document.getElementById('suggest-next-action');
+    const suggestionStatus = document.getElementById('suggestion-status');
+    const suggestionContainer = document.getElementById('next-action-suggestion');
+    const copySuggestionButton = document.getElementById('copy-suggestion-email');
+    const suggestionError = document.getElementById('suggestion-error');
+    const suggestionErrorMessage = document.getElementById('suggestion-error-message');
+    const suggestionRetryButton = document.getElementById('suggestion-retry');
+    const applySuggestionButton = document.getElementById('apply-suggestion');
+    const suggestionFields = {
+        type: document.getElementById('suggestion-type'),
+        title: document.getElementById('suggestion-title'),
+        description: document.getElementById('suggestion-description'),
+        dueDate: document.getElementById('suggestion-due-date'),
+        confidence: document.getElementById('suggestion-confidence'),
+        notes: document.getElementById('suggestion-notes'),
+        emailSubject: document.getElementById('suggestion-email-subject'),
+        emailBody: document.getElementById('suggestion-email-body'),
+    };
     let currentNotesMode = 'raw';
+    let lastSuggestionData = null;
 
     function setNotesView(mode) {
         currentNotesMode = mode;
@@ -263,6 +321,112 @@
         }
     }
 
+    async function requestNextActionSuggestion() {
+        if (!suggestionButton || !suggestionStatus) {
+            return;
+        }
+        suggestionButton.disabled = true;
+        suggestionStatus.textContent = 'Gathering signals...';
+        if (suggestionError) {
+            suggestionError.style.display = 'none';
+        }
+        try {
+            const response = await fetch(`/contacts/{{ contact.id }}/suggest_next_action`);
+            if (!response.ok) {
+                throw new Error(`Server responded with ${response.status}`);
+            }
+            const data = await response.json();
+            populateSuggestion(data);
+            suggestionStatus.textContent = 'Suggestion ready. Review before using.';
+        } catch (error) {
+            suggestionStatus.textContent = `Unable to fetch suggestion: ${error.message}`;
+            if (suggestionError && suggestionErrorMessage) {
+                suggestionErrorMessage.textContent = `We couldn't load a suggestion (${error.message}).`;
+                suggestionError.style.display = 'flex';
+            }
+        } finally {
+            if (suggestionButton) {
+                suggestionButton.disabled = false;
+            }
+        }
+    }
+
+    function populateSuggestion(data) {
+        if (!suggestionFields.type) {
+            return;
+        }
+        lastSuggestionData = data;
+        const title = data.next_action_title || '';
+        const description = data.next_action_description || '';
+        const type = (data.next_action_type || 'no_action_recommended').replace(/_/g, ' ');
+        const dueDate = data.suggested_due_date || '-';
+        const confidence = typeof data.confidence === 'number'
+            ? `${Math.round(data.confidence * 100)}%`
+            : '-';
+        suggestionFields.type.textContent = type;
+        suggestionFields.title.textContent = title || '(no title suggested)';
+        suggestionFields.description.textContent = description || '(no description provided)';
+        suggestionFields.dueDate.textContent = dueDate;
+        suggestionFields.confidence.textContent = confidence;
+        suggestionFields.notes.textContent = data.notes_for_adam || '-';
+        if (suggestionFields.emailSubject) {
+            suggestionFields.emailSubject.value = data.proposed_email_subject || '';
+        }
+        if (suggestionFields.emailBody) {
+            suggestionFields.emailBody.value = data.proposed_email_body || '';
+        }
+        if (applySuggestionButton) {
+            const disableApply = !data || data.next_action_type === 'no_action_recommended';
+            applySuggestionButton.disabled = disableApply;
+        }
+        if (suggestionContainer) {
+            suggestionContainer.style.display = 'block';
+        }
+    }
+
+    async function copySuggestedEmail() {
+        if (!suggestionFields.emailBody || !suggestionFields.emailBody.value) {
+            suggestionStatus.textContent = 'No draft to copy yet.';
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(suggestionFields.emailBody.value);
+            suggestionStatus.textContent = 'Email draft copied.';
+        } catch (error) {
+            suggestionStatus.textContent = 'Unable to copy draft.';
+        }
+    }
+
+    async function applySuggestedNextAction() {
+        if (!applySuggestionButton || !lastSuggestionData) {
+            suggestionStatus.textContent = 'No suggestion to apply yet.';
+            return;
+        }
+        if (lastSuggestionData.next_action_type === 'no_action_recommended') {
+            suggestionStatus.textContent = 'Current suggestion does not include an actionable next step.';
+            return;
+        }
+        applySuggestionButton.disabled = true;
+        suggestionStatus.textContent = 'Creating next action...';
+        try {
+            const response = await fetch(`/contacts/{{ contact.id }}/apply_suggested_next_action`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(lastSuggestionData),
+            });
+            if (!response.ok) {
+                throw new Error(`Server responded with ${response.status}`);
+            }
+            suggestionStatus.textContent = 'Next action created. You can refine it in the interactions list.';
+        } catch (error) {
+            suggestionStatus.textContent = `Unable to apply suggestion: ${error.message}`;
+        } finally {
+            if (applySuggestionButton) {
+                applySuggestionButton.disabled = lastSuggestionData.next_action_type === 'no_action_recommended';
+            }
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         const initialMode = determineInitialNotesMode();
         setNotesView(initialMode);
@@ -274,6 +438,22 @@
                 if (id) summariseNote(id);
             });
         });
+
+        if (suggestionButton) {
+            suggestionButton.addEventListener('click', requestNextActionSuggestion);
+        }
+        if (copySuggestionButton) {
+            copySuggestionButton.addEventListener('click', copySuggestedEmail);
+        }
+        if (applySuggestionButton) {
+            applySuggestionButton.addEventListener('click', applySuggestedNextAction);
+        }
+        if (suggestionRetryButton) {
+            suggestionRetryButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                requestNextActionSuggestion();
+            });
+        }
     });
 
     if (rawToggle) {

@@ -1,14 +1,18 @@
+import json
+import logging
 import os
+import time
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
+from pydantic import ValidationError
 
-from . import models
+from . import models, schemas
 
 _DRAFTING_MODEL = "gpt-5-mini-2025-08-07"
 _SUMMARISER_MODEL = "gpt-5-nano-2025-08-07"
@@ -23,6 +27,7 @@ Use short paragraphs and bullet points. Avoid hype, jargon, and grand claims. Ne
 _DEFAULT_SYSTEM_MESSAGE = ADAM_GLOBAL_STYLE
 
 CONTEXT_DIR = Path(__file__).parent / "context"
+logger = logging.getLogger("atlas.intel")
 
 
 def _load_example(filename: str) -> str:
@@ -45,6 +50,39 @@ CONTACT_SOURCE_DESCRIPTIONS = {
     "other": "Self-initiated research; Adam reached out after independent digging.",
 }
 
+_CRM_FACT_TEMPLATE: Dict[str, Any] = {
+    "contact_name": None,
+    "contact_email": None,
+    "org": None,
+    "intent": "unclear",
+    "mentioned_process": "other/unclear",
+    "timeline": "unknown",
+    "next_action_hint": None,
+    "summary": "",
+}
+_VALID_INTENTS = {
+    "interested_in_ai_audit",
+    "wants_training",
+    "outreach_workflow",
+    "lss_green_belt_with_ai",
+    "followup_needed",
+    "general_interest",
+    "unclear",
+}
+_VALID_TIMELINES = {"this_month", "next_quarter", "later", "unknown"}
+def _flag_enabled(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def fact_extraction_enabled() -> bool:
+    return _flag_enabled("FACT_EXTRACTION_ENABLED", True) and bool(os.getenv("OPENAI_API_KEY"))
+
+
+def suggestions_feature_enabled() -> bool:
+    return _flag_enabled("INTEL_SUGGESTIONS_ENABLED", True) and bool(os.getenv("OPENAI_API_KEY"))
 
 def _shorten_snippet(value: Optional[str], *, limit: int = 180, placeholder: str = "(unclear)") -> str:
     if not value:
@@ -384,6 +422,277 @@ Rules:
 """.strip()
 
     return _invoke_model(prompt, model=_DRAFTING_MODEL, system_message=ADAM_GLOBAL_STYLE)
+
+
+def extract_crm_facts_from_text(
+    text: str,
+    *,
+    contact_name: Optional[str],
+    contact_company: Optional[str],
+    contact_email: Optional[str],
+    source_type: str,
+    source_date: Optional[str] = None,
+    contact_id: Optional[int] = None,
+    source_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Derive structured CRM facts from raw text."""
+    if not fact_extraction_enabled():
+        raise RuntimeError("Fact extraction is disabled.")
+    excerpt = _shorten_snippet(text, limit=600, placeholder="(unclear)")
+    prompt = f"""
+You are CRM_FACT_EXTRACTOR. Turn the provided context into grounded CRM facts Adam can reuse later.
+
+Contact context:
+- Name: {contact_name or "(unclear)"}
+- Company: {contact_company or "(unclear)"}
+- Email: {contact_email or "(unclear)"}
+- Source type: {source_type}
+- Source date: {source_date or "(unclear)"}
+
+Raw text:
+\"\"\"{text.strip()}\"\"\"
+
+Instructions:
+- Work only with the supplied text; mark gaps with "(unclear)".
+- Output valid JSON (no comments, code fences, or prose) matching this schema:
+{{
+  "contact_name": string|null,
+  "contact_email": string|null,
+  "org": string|null,
+  "intent": one of ["interested_in_ai_audit","wants_training","outreach_workflow","lss_green_belt_with_ai","followup_needed","general_interest","unclear"],
+  "mentioned_process": short string such as "outreach", "internal_audit", "proposal_workflow", "lss_green_belt", or "other/unclear",
+  "timeline": one of ["this_month","next_quarter","later","unknown"],
+  "next_action_hint": short free-text suggestion or null,
+  "summary": 2-4 sentence recap for Adam.
+}}
+- Prefer concise, factual language and reuse "(unclear)" when evidence is missing.
+- If nothing concrete is present, set intent="unclear" and leave other fields null or "(unclear)".
+""".strip()
+
+    start = time.perf_counter()
+    try:
+        response = _invoke_model(prompt, model=_SUMMARISER_MODEL, system_message=ADAM_GLOBAL_STYLE)
+        parsed = _best_effort_json_loads(response)
+        payload_model = _normalise_fact_payload(parsed or {}, fallback_text=text)
+        success = True
+    except Exception:
+        success = False
+        parsed = None
+        payload_model = _normalise_fact_payload({}, fallback_text=text)
+        logger.exception(
+            "crm_fact_extraction_failed",
+            extra={
+                "contact_id": contact_id,
+                "source_type": source_type,
+                "source_id": source_id,
+            },
+        )
+    finally:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        logger.info(
+            "crm_fact_extraction_complete",
+            extra={
+                "contact_id": contact_id,
+                "source_type": source_type,
+                "source_id": source_id,
+                "model": _SUMMARISER_MODEL,
+                "duration_ms": duration_ms,
+                "tokens": "n/a",
+                "success": success,
+            },
+        )
+
+    payload = payload_model.model_dump()
+    if parsed is None:
+        payload["raw_text"] = excerpt
+    return payload
+
+
+def suggest_next_action_for_contact(
+    contact: models.Contact,
+    interactions: Sequence[models.Interaction],
+    notes: Sequence[models.Note],
+    facts: Sequence["models.CRMFact"],
+) -> Dict[str, Any]:
+    """Generate a next-action recommendation grounded in recent history."""
+    if not suggestions_feature_enabled():
+        raise RuntimeError("Next action suggestions are disabled.")
+    interaction_lines = []
+    for interaction in interactions:
+        timestamp = interaction.timestamp.strftime("%Y-%m-%d") if interaction.timestamp else "(undated)"
+        summary = _shorten_snippet(interaction.summary, limit=180)
+        outcome = (interaction.outcome or "pending").replace("_", " ")
+        action = _shorten_snippet(interaction.next_action, limit=120) if interaction.next_action else "-"
+        due = interaction.next_action_due.strftime("%Y-%m-%d") if interaction.next_action_due else "-"
+        interaction_lines.append(
+            f"- {timestamp}: {interaction.type} | outcome={outcome} | next_action={action} (due {due}) | {summary}"
+        )
+    interactions_block = "\n".join(interaction_lines) if interaction_lines else "(No recent interactions)"
+
+    note_lines = []
+    for note in notes:
+        meeting_date = note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else "(undated)"
+        structured = _shorten_snippet(note.processed_summary, limit=220) if note.processed_summary else None
+        raw = _shorten_snippet(note.raw_notes, limit=220)
+        note_lines.append(f"- {meeting_date}: structured={structured or '(none)'} | raw={raw}")
+    notes_block = "\n".join(note_lines) if note_lines else "(No recent notes)"
+
+    fact_lines = []
+    for fact in facts:
+        payload = fact.fact_payload or {}
+        intent = payload.get("intent") or "unclear"
+        timeline = payload.get("timeline") or "unknown"
+        summary = _shorten_snippet(payload.get("summary"), limit=220, placeholder="(unclear)")
+        hint = _shorten_snippet(payload.get("next_action_hint"), limit=160, placeholder="(none)")
+        fact_lines.append(f"- intent={intent}, timeline={timeline}, summary={summary} | hint={hint}")
+    facts_block = "\n".join(fact_lines) if fact_lines else "(No structured facts yet)"
+
+    prompt = f"""
+You are NEXT_ACTION_COACH. Recommend Adam Phillips' most useful next action based on the context below.
+
+Contact: {contact.name} ({contact.role}) at {contact.company_name}
+
+Recent interactions:
+{interactions_block}
+
+Recent notes:
+{notes_block}
+
+Structured facts:
+{facts_block}
+
+Output strict JSON with these fields:
+{{
+  "next_action_type": one of ["followup_email","book_call","send_proposal","share_case_study","nurture_checkin","no_action_recommended"],
+  "next_action_title": short label for the board,
+  "next_action_description": 2-3 sentences on what to do and why,
+  "proposed_email_subject": optional subject <= 9 words (null if not needed),
+  "proposed_email_body": optional email draft following Adam's guardrails (null if not needed),
+  "suggested_due_date": ISO date string (YYYY-MM-DD) or null,
+  "confidence": float 0-1,
+  "notes_for_adam": short bullet-style text explaining the reasoning.
+}}
+
+Guidance:
+- Ground every suggestion in the supplied evidence; mark gaps with "(unclear)".
+- If there isn't enough signal, set next_action_type="no_action_recommended" and explain why.
+- Reinforce that AI drafts, humans approve; never imply auto-sending or control-loop autonomy.
+- Avoid new promises on price/timeline; keep tone practical and measurable.
+""".strip()
+
+    start = time.perf_counter()
+    try:
+        response = _invoke_model(prompt, model=_DRAFTING_MODEL, system_message=ADAM_GLOBAL_STYLE)
+        parsed = _best_effort_json_loads(response)
+        suggestion = _normalise_next_action_payload(parsed or {})
+        success = True
+    except Exception:
+        logger.exception(
+            "next_action_suggestion_failed",
+            extra={
+                "contact_id": contact.id,
+            },
+        )
+        success = False
+        raise
+    finally:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        logger.info(
+            "next_action_suggestion_complete",
+            extra={
+                "contact_id": contact.id,
+                "model": _DRAFTING_MODEL,
+                "duration_ms": duration_ms,
+                "tokens": "n/a",
+                "success": success,
+            },
+        )
+
+    return suggestion.model_dump(mode="json")
+
+
+def _normalise_fact_payload(candidate: Dict[str, Any], *, fallback_text: str) -> schemas.CRMFactPayload:
+    payload = dict(_CRM_FACT_TEMPLATE)
+    candidate = candidate or {}
+
+    for key in _CRM_FACT_TEMPLATE:
+        value = candidate.get(key)
+        if isinstance(value, str):
+            value = value.strip()
+        if value in ("", None):
+            continue
+        payload[key] = value
+
+    if payload["intent"] not in _VALID_INTENTS:
+        payload["intent"] = "unclear"
+    if payload["timeline"] not in _VALID_TIMELINES:
+        payload["timeline"] = "unknown"
+    if not isinstance(payload["summary"], str):
+        payload["summary"] = ""
+    if payload["summary"]:
+        payload["summary"] = payload["summary"].strip()
+    else:
+        payload["summary"] = _shorten_snippet(fallback_text, limit=200, placeholder="(unclear)")
+
+    try:
+        return schemas.CRMFactPayload(**payload)
+    except ValidationError:
+        return schemas.CRMFactPayload(**_CRM_FACT_TEMPLATE, summary=_shorten_snippet(fallback_text, limit=200, placeholder="(unclear)"))
+
+
+def _normalise_next_action_payload(candidate: Dict[str, Any]) -> schemas.NextActionSuggestion:
+    candidate = candidate or {}
+    defaults = {
+        "next_action_type": candidate.get("next_action_type") or "no_action_recommended",
+        "next_action_title": candidate.get("next_action_title") or "",
+        "next_action_description": candidate.get("next_action_description") or "",
+        "proposed_email_subject": candidate.get("proposed_email_subject") or "",
+        "proposed_email_body": candidate.get("proposed_email_body") or "",
+        "suggested_due_date": candidate.get("suggested_due_date"),
+        "confidence": candidate.get("confidence", 0.0),
+        "notes_for_adam": candidate.get("notes_for_adam") or "",
+    }
+    try:
+        return schemas.NextActionSuggestion(**defaults)
+    except ValidationError:
+        return schemas.NextActionSuggestion(
+            next_action_type="no_action_recommended",
+            next_action_title="",
+            next_action_description="Not enough context to recommend a next action.",
+            proposed_email_subject=None,
+            proposed_email_body=None,
+            suggested_due_date=None,
+            confidence=0.0,
+            notes_for_adam="AI assistant could not produce a grounded suggestion.",
+        )
+
+
+def _best_effort_json_loads(text: str) -> Optional[Dict[str, Any]]:
+    """Parse JSON even if the model wrapped it in prose or code fences."""
+    if not text:
+        return None
+    candidates = []
+    trimmed = text.strip()
+    candidates.append(trimmed)
+
+    if trimmed.startswith("```"):
+        lines = trimmed.splitlines()
+        fence_removed = "\n".join(lines[1:])
+        if fence_removed.endswith("```"):
+            fence_removed = "\n".join(fence_removed.splitlines()[:-1])
+        candidates.append(fence_removed.strip())
+
+    start = trimmed.find("{")
+    end = trimmed.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidates.append(trimmed[start : end + 1])
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return None
 
 def summarise_note(note: models.Note, contact: models.Contact) -> str:
     """Produce a structured summary of raw meeting notes."""

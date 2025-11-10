@@ -10,6 +10,7 @@ ATLAS is a lightweight, self-hosted BD aide Adam Phillips uses to stay on top of
 - **Interaction logging** - Email/LinkedIn/call/meeting/note entries with summaries, outcomes, optional outcome notes, next actions, and due dates (new entries default to seven days out). Full timeline appears on the contact detail page with edit/delete controls.
 - **Notes workspace** - Store raw notes plus optional processed summaries per meeting date. Contact pages include a Raw/Structured toggle that defaults to Structured whenever at least one summary exists.
 - **Structured note summaries** - "Generate / Refresh structured summary" buttons run the BD_NOTES_SUMMARISER agent inline and overwrite the stored processed summary.
+- **Intelligence helpers** - Notes and interactions trigger CRM fact extraction (stored in `crm_facts`), and the Next Action Assistant suggests/apply-ready next steps when enabled.
 - **Next Actions board** - `/next-actions` shows every next action due today or overdue, grouped with the originating interaction and linked back to the contact, with a Completed button to archive items once handled.
 - **Outcomes dashboard** - `/metrics/outcomes` aggregates interaction outcomes (pending, no reply, positive variants, negatives) for quick pipeline health checks.
 - **Contact list filters** - `/contacts` filters by status and keyword search across name + company for quick segmentation.
@@ -49,6 +50,33 @@ ATLAS is a lightweight, self-hosted BD aide Adam Phillips uses to stay on top of
 - **Generate summaries:** Each note row includes "Generate / Refresh structured summary," calling BD_NOTES_SUMMARISER with raw text + meeting metadata and updating the processed summary column.
 - **Raw storage:** Raw notes stay untouched so you can always re-run the summariser if prompts change.
 
+### Intelligence helpers
+
+- **CRM facts:** When `FACT_EXTRACTION_ENABLED=true` (default) and an OpenAI key is configured, every interaction and note create/update kicks off the `CRM_FACT_EXTRACTOR` helper. Facts land in the `crm_facts` table (cascading with the contact) so you can filter/search for intents, timelines, and hinted next steps later.
+- **Backfill:** Set `INTEL_ADMIN_TOKEN`, then call `POST /admin/backfill_crm_facts?token=TOKEN&batch_size=25` to re-process older notes/interactions without facts. The route sleeps between calls, logs counts, and respects the same feature flag.
+- **Next Action Assistant:** When `INTEL_SUGGESTIONS_ENABLED=true`, contact pages show a "Suggest Next Action" card that hits `GET /contacts/{id}/suggest_next_action`, surfaces the LLM's recommendation + optional draft, and lets you apply it via `POST /contacts/{id}/apply_suggested_next_action`.
+- **Apply flow:** Applying a suggestion creates a placeholder interaction with the recommended next action + due date so it immediately rolls onto the Next Actions board; drafts stay local for editing.
+- **Example curls:**
+
+```bash
+# Fetch a suggestion (requires INTEL_SUGGESTIONS_ENABLED + OPENAI_API_KEY)
+curl http://localhost:8000/contacts/12/suggest_next_action
+
+# Apply a suggestion (replace JSON with the payload you just received)
+curl -X POST http://localhost:8000/contacts/12/apply_suggested_next_action \
+  -H "Content-Type: application/json" \
+  -d '{
+        "next_action_type": "followup_email",
+        "next_action_title": "Send recap + pilot sketch",
+        "next_action_description": "Draft a short recap email that ties their traceability pains to two pilot co-pilots.",
+        "proposed_email_subject": "Traceability pilot outline",
+        "proposed_email_body": "Hi Dana,...",
+        "suggested_due_date": "2024-06-14",
+        "confidence": 0.78,
+        "notes_for_adam": "Grounded in 2024-05 call + latest note."
+      }'
+```
+
 ### Email drafting workflows
 
 - **Draft First Email:** Pulls contact fields, inferred greeting, and (when available) the latest website snapshot to craft a first-touch email in Adam's voice. Draft drops into an inline textarea for editing.
@@ -74,6 +102,9 @@ ATLAS is a lightweight, self-hosted BD aide Adam Phillips uses to stay on top of
 
 - `OPENAI_API_KEY` - required for all AI helpers. Loaded automatically (via `python-dotenv`) if stored in a local `.env`.
 - `DATABASE_URL` - optional override for the SQLAlchemy engine. Defaults to the Postgres DSN defined in `docker-compose.yml`.
+- `FACT_EXTRACTION_ENABLED` - defaults to `true`. Flip to `false` to pause CRM fact extraction (notes/interactions + backfill).
+- `INTEL_SUGGESTIONS_ENABLED` - defaults to `true`. Flip to `false` to hide the Next Action Assistant UI and block suggestion/apply endpoints.
+- `INTEL_ADMIN_TOKEN` - shared secret required to call `POST /admin/backfill_crm_facts`; set to any non-empty string when you want to run a backfill.
 
 ### Run with Docker Compose
 

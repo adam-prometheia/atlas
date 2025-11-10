@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, JSON, String, Text, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -36,6 +36,13 @@ class Contact(Base):
         back_populates="contact",
         cascade="all, delete-orphan",
         order_by="desc(Note.meeting_date)",
+    )
+    crm_facts = relationship(
+        "CRMFact",
+        back_populates="contact",
+        cascade="all, delete-orphan",
+        order_by="desc(CRMFact.created_at)",
+        passive_deletes=True,
     )
 
 
@@ -77,3 +84,26 @@ class ArchivedNextAction(Base):
     next_action_due = Column(Date, nullable=True)
 
     interaction = relationship("Interaction")
+
+
+class CRMFact(Base):
+    __tablename__ = "crm_facts"
+    __table_args__ = (
+        Index("idx_crm_facts_contact_created", "contact_id", "created_at"),
+        Index("idx_crm_facts_source", "source_type", "source_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    source_type = Column(String(50), nullable=False)
+    source_id = Column(Integer, nullable=True)
+    fact_payload = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    contact = relationship("Contact", back_populates="crm_facts")

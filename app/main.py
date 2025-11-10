@@ -1,19 +1,23 @@
+import logging
+import os
+import time
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from . import llm, models
+from . import llm, models, schemas
 from .database import Base, engine, get_db
 
 
 app = FastAPI(title="ATLAS - AI Toolkit for Lead Activation & Stewardship")
 templates = Jinja2Templates(directory="app/templates")
+logger = logging.getLogger("atlas.app")
 
 
 INTERACTION_TYPES = ["email", "linkedin", "call", "meeting", "note"]
@@ -105,6 +109,63 @@ def _format_selected_note_lines(notes: Sequence[models.Note]) -> str:
         else:
             lines.append(f"- {meeting_date}: raw: {raw_excerpt}")
     return "\n".join(lines)
+
+
+def _maybe_extract_fact(
+    db: Session,
+    *,
+    contact: models.Contact,
+    source_type: str,
+    source_id: int,
+    text: Optional[str],
+    source_date: Optional[str] = None,
+):
+    if not text or not text.strip():
+        return
+    if not llm.fact_extraction_enabled():
+        return
+    try:
+        payload = llm.extract_crm_facts_from_text(
+            text,
+            contact_name=contact.name,
+            contact_company=contact.company_name,
+            contact_email=contact.email,
+            source_type=source_type,
+            source_date=source_date,
+            contact_id=contact.id,
+            source_id=source_id,
+        )
+        existing = (
+            db.query(models.CRMFact)
+            .filter(
+                models.CRMFact.source_type == source_type,
+                models.CRMFact.source_id == source_id,
+            )
+            .first()
+        )
+        if existing:
+            existing.fact_payload = payload
+        else:
+            existing = models.CRMFact(
+                contact_id=contact.id,
+                source_type=source_type,
+                source_id=source_id,
+                fact_payload=payload,
+            )
+            db.add(existing)
+        db.commit()
+        db.refresh(existing)
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "fact_extraction_failed",
+            extra={
+                "contact_id": contact.id,
+                "source_type": source_type,
+                "source_id": source_id,
+            },
+            exc_info=exc,
+        )
 
 
 def _ensure_contact_exists(contact_id: int, db: Session) -> models.Contact:
@@ -362,6 +423,7 @@ def get_contact_detail(contact_id: int, request: Request, db: Session = Depends(
         {
             "request": request,
             "contact": contact,
+            "suggestions_enabled": llm.suggestions_feature_enabled(),
         },
     )
 
@@ -426,6 +488,14 @@ def create_interaction(
     )
     db.add(interaction)
     db.commit()
+    _maybe_extract_fact(
+        db,
+        contact=contact,
+        source_type="interaction",
+        source_id=interaction.id,
+        text=summary,
+        source_date=interaction.timestamp.strftime("%Y-%m-%d") if interaction.timestamp else None,
+    )
 
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact.id),
@@ -512,6 +582,14 @@ def update_interaction(
     interaction.outcome_notes = outcome_notes
 
     db.commit()
+    _maybe_extract_fact(
+        db,
+        contact=contact,
+        source_type="interaction",
+        source_id=interaction.id,
+        text=summary,
+        source_date=interaction.timestamp.strftime("%Y-%m-%d") if interaction.timestamp else None,
+    )
 
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact.id),
@@ -617,10 +695,194 @@ def create_note(
     db.add(note)
     db.commit()
 
+    _maybe_extract_fact(
+        db,
+        contact=contact,
+        source_type="note",
+        source_id=note.id,
+        text=raw_notes,
+        source_date=note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else None,
+    )
+
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact.id),
         status_code=303,
     )
+
+
+@app.get("/contacts/{contact_id}/suggest_next_action")
+def suggest_next_action(contact_id: int, db: Session = Depends(get_db)):
+    if not llm.suggestions_feature_enabled():
+        raise HTTPException(status_code=404, detail="Next action suggestions are disabled.")
+    contact = _ensure_contact_exists(contact_id, db)
+    interactions = (
+        db.query(models.Interaction)
+        .filter(models.Interaction.contact_id == contact.id)
+        .order_by(models.Interaction.timestamp.desc())
+        .limit(5)
+        .all()
+    )
+    notes = (
+        db.query(models.Note)
+        .filter(models.Note.contact_id == contact.id)
+        .order_by(models.Note.meeting_date.desc())
+        .limit(3)
+        .all()
+    )
+    facts = (
+        db.query(models.CRMFact)
+        .filter(models.CRMFact.contact_id == contact.id)
+        .order_by(models.CRMFact.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    try:
+        suggestion = llm.suggest_next_action_for_contact(contact, interactions, notes, facts)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Unable to generate suggestion: {exc}") from exc
+    return JSONResponse(suggestion)
+
+
+@app.post("/contacts/{contact_id}/apply_suggested_next_action")
+def apply_suggested_next_action(
+    contact_id: int,
+    suggestion: schemas.NextActionSuggestion = Body(...),
+    db: Session = Depends(get_db),
+):
+    if not llm.suggestions_feature_enabled():
+        raise HTTPException(status_code=404, detail="Next action suggestions are disabled.")
+    if suggestion.next_action_type == "no_action_recommended":
+        raise HTTPException(status_code=400, detail="No actionable suggestion to apply.")
+    contact = _ensure_contact_exists(contact_id, db)
+    due_date = suggestion.suggested_due_date
+    summary = suggestion.next_action_description or suggestion.next_action_title or "AI-suggested next step."
+    next_action_text = suggestion.next_action_title or suggestion.next_action_description or "Review AI-suggested next step."
+    interaction = models.Interaction(
+        contact_id=contact.id,
+        type="note",
+        summary=f"AI suggestion: {summary}",
+        next_action=next_action_text,
+        next_action_due=due_date,
+        outcome="pending",
+        outcome_notes="Created via Next Action Assistant.",
+    )
+    db.add(interaction)
+    db.commit()
+    return {"interaction_id": interaction.id}
+
+
+@app.post("/admin/backfill_crm_facts")
+def backfill_crm_facts(
+    token: str = Query(..., description="Admin token guarding the backfill route"),
+    batch_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    admin_token = os.getenv("INTEL_ADMIN_TOKEN")
+    if not admin_token or token != admin_token:
+        raise HTTPException(status_code=403, detail="Invalid admin token.")
+    if not llm.fact_extraction_enabled():
+        raise HTTPException(status_code=400, detail="Fact extraction is disabled.")
+
+    processed_notes = 0
+    processed_interactions = 0
+
+    notes_to_process = (
+        db.query(models.Note)
+        .outerjoin(
+            models.CRMFact,
+            and_(
+                models.CRMFact.source_type == "note",
+                models.CRMFact.source_id == models.Note.id,
+            ),
+        )
+        .filter(models.CRMFact.id.is_(None))
+        .order_by(models.Note.meeting_date.desc())
+        .limit(batch_size)
+        .all()
+    )
+    for note in notes_to_process:
+        contact = note.contact or _ensure_contact_exists(note.contact_id, db)
+        _maybe_extract_fact(
+            db,
+            contact=contact,
+            source_type="note",
+            source_id=note.id,
+            text=note.raw_notes,
+            source_date=note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else None,
+        )
+        processed_notes += 1
+        time.sleep(0.5)
+
+    interactions_to_process = (
+        db.query(models.Interaction)
+        .outerjoin(
+            models.CRMFact,
+            and_(
+                models.CRMFact.source_type == "interaction",
+                models.CRMFact.source_id == models.Interaction.id,
+            ),
+        )
+        .filter(models.CRMFact.id.is_(None))
+        .order_by(models.Interaction.timestamp.desc())
+        .limit(batch_size)
+        .all()
+    )
+    for interaction in interactions_to_process:
+        contact = interaction.contact or _ensure_contact_exists(interaction.contact_id, db)
+        _maybe_extract_fact(
+            db,
+            contact=contact,
+            source_type="interaction",
+            source_id=interaction.id,
+            text=interaction.summary,
+            source_date=interaction.timestamp.strftime("%Y-%m-%d") if interaction.timestamp else None,
+        )
+        processed_interactions += 1
+        time.sleep(0.5)
+
+    remaining_notes = (
+        db.query(models.Note)
+        .outerjoin(
+            models.CRMFact,
+            and_(
+                models.CRMFact.source_type == "note",
+                models.CRMFact.source_id == models.Note.id,
+            ),
+        )
+        .filter(models.CRMFact.id.is_(None))
+        .count()
+    )
+    remaining_interactions = (
+        db.query(models.Interaction)
+        .outerjoin(
+            models.CRMFact,
+            and_(
+                models.CRMFact.source_type == "interaction",
+                models.CRMFact.source_id == models.Interaction.id,
+            ),
+        )
+        .filter(models.CRMFact.id.is_(None))
+        .count()
+    )
+
+    logger.info(
+        "crm_fact_backfill",
+        extra={
+            "processed_notes": processed_notes,
+            "processed_interactions": processed_interactions,
+            "remaining_notes": remaining_notes,
+            "remaining_interactions": remaining_interactions,
+        },
+    )
+
+    return {
+        "processed_notes": processed_notes,
+        "processed_interactions": processed_interactions,
+        "remaining_notes": remaining_notes,
+        "remaining_interactions": remaining_interactions,
+    }
 
 
 @app.get("/notes/{note_id}/edit")
@@ -690,6 +952,14 @@ def update_note(
     note.processed_summary = processed_summary
 
     db.commit()
+    _maybe_extract_fact(
+        db,
+        contact=contact,
+        source_type="note",
+        source_id=note.id,
+        text=raw_notes,
+        source_date=note.meeting_date.strftime("%Y-%m-%d") if note.meeting_date else None,
+    )
 
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact.id),

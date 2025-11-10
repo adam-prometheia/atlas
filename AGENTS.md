@@ -81,3 +81,23 @@ Each agent adds role-specific instructions on top of this shared style.
 - **Outputs:** Five sections in this order, each with 1-4 bullets (<= 18 words): Context; Current process; Pains & risks; Potential AI fits; Next steps / decisions. Potential AI fits only appear when justified, speculative entries start with `Possible:`, and if no AI opportunities were discussed the section contains one bullet: `No explicit AI opportunities discussed.`
 - **Key rules:** Never fabricate details; mark gaps with `(unclear)`; keep tone neutral; stick to the heading order; note that Potential AI fits should be omitted unless the notes justify it beyond a `Possible:` inference.
 - **Used by:** `summarise_note()` -> POST `/notes/{id}/summarise`, triggered by the "Generate / Refresh structured summary" buttons on contact pages.
+
+---
+
+## CRM_FACT_EXTRACTOR
+- **Model:** `gpt-5-nano-2025-08-07`
+- **Role:** Turn raw interactions, notes, or other free-text sources into structured CRM facts Adam can reference later.
+- **Inputs:** Source text plus metadata (contact name/company/email, source type, optional date). Called immediately after saving notes/interactions and by the backfill utility.
+- **Outputs:** JSON payload with `contact_name`, `contact_email`, `org`, `intent`, `mentioned_process`, `timeline`, `next_action_hint`, `summary`, and optional `raw_text` fallback.
+- **Key rules:** Use only supplied text; mark missing info with `(unclear)`; default `intent="unclear"` and `timeline="unknown"` when evidence is weak; keep `summary` to 2-4 grounded sentences; no speculation beyond `Possible:` phrasing.
+- **Used by:** `_maybe_extract_fact()` inside FastAPI note/interaction flows and the `/admin/backfill_crm_facts` route. Feature flag: `FACT_EXTRACTION_ENABLED`.
+
+---
+
+## NEXT_ACTION_COACH
+- **Model:** `gpt-5-mini-2025-08-07`
+- **Role:** Review a contact's recent interactions, notes, and CRM facts to recommend the most useful next action (plus optional email draft).
+- **Inputs:** Contact metadata, up to five recent interactions, three notes, and the latest CRM facts. Called via `/contacts/{id}/suggest_next_action` when the UI button is pressed.
+- **Outputs:** JSON with `next_action_type`, `next_action_title`, `next_action_description`, optional `proposed_email_subject/body`, `suggested_due_date`, `confidence`, and `notes_for_adam`.
+- **Key rules:** Stay grounded in supplied evidence; if signals are weak, return `next_action_type="no_action_recommended"` and explain why; reiterate human-in-the-loop guardrails; never claim emails are auto-sent or that AI is operating autonomously; mark uncertainties explicitly.
+- **Used by:** `suggest_next_action_for_contact()` (GET `/contacts/{id}/suggest_next_action`) and the new POST `/contacts/{id}/apply_suggested_next_action`. Feature flag: `INTEL_SUGGESTIONS_ENABLED`.
