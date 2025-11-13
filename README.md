@@ -113,6 +113,7 @@ docker compose up --build
 ```
 
 This starts the FastAPI app on `http://localhost:8000` and a Postgres 16 instance. The web container mounts the repo for live reloads.
+The container entrypoint now runs `alembic upgrade head` automatically, so every boot replays any pending migrations before `uvicorn` starts.
 
 ### Local development without Docker
 
@@ -126,12 +127,27 @@ uvicorn app.main:app --reload
 
 Point `DATABASE_URL` to your local Postgres (or an SQLite file) before launching `uvicorn`.
 
+### Database migrations
+
+ATLAS now relies on Alembic for schema changes—`Base.metadata.create_all()` is no longer invoked at startup.
+
+1. Install dependencies (Docker image or local venv) so `alembic` is on your PATH.
+2. Apply migrations before running the app:
+   ```bash
+   alembic upgrade head
+   ```
+3. For schema edits, update `app/models.py`, then generate a migration and review the diff:
+   ```bash
+   alembic revision --autogenerate -m "describe change"
+   ```
+4. Commit the new migration script along with the model changes so every environment stays in sync.
+
 ---
 
 ## Maintenance & conventions
 
-- **Prompts + models live in `app/llm.py`.** Whenever you adjust prompts, models, or helper names, update `AGENTS.md` and the README model references in the same PR.
+-- **Prompts + models live in `app/llm.py`.** Whenever you adjust prompts, models, or helper names, update `AGENTS.md` and the README model references in the same PR. A lightweight CI check (`scripts/verify_models.py`) now verifies the documented model strings match `app/llm.py` and will fail the workflow if they drift.
 - **Routes & UI docs:** Add or change FastAPI routes/templates? Record those behaviours in the README features/workflows section so future Adam (or assistants) can reason about the app quickly.
 - **Sync models + docs:** Keep the documented model names in lockstep with `_DRAFTING_MODEL` and `_SUMMARISER_MODEL`.
 - **Website + note helpers:** If you tweak how website summaries or structured notes are generated, make sure both README workflows and AGENTS guardrails reflect the actual behaviour.
-- **Philosophy first:** All AI helpers should continue to echo "forethought first, start small -> prove value -> scale what works." Flag any deviation during reviews.
+- **Philosophy first:** All AI helpers should continue to echo "understand first, start small -> prove value -> scale what works." Flag any deviation during reviews.

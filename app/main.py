@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from . import llm, models, schemas
-from .database import Base, engine, get_db
+from .database import get_db
 
 
 app = FastAPI(title="ATLAS - AI Toolkit for Lead Activation & Stewardship")
@@ -251,11 +251,6 @@ def _try_fetch_website_summary(contact: models.Contact) -> Optional[str]:
         return None
     except Exception:
         return None
-
-
-@app.on_event("startup")
-def on_startup():
-    Base.metadata.create_all(bind=engine)
 
 
 @app.get("/", include_in_schema=False)

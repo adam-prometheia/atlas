@@ -14,8 +14,13 @@ from pydantic import ValidationError
 
 from . import models, schemas
 
-_DRAFTING_MODEL = "gpt-5-mini-2025-08-07"
-_SUMMARISER_MODEL = "gpt-5-nano-2025-08-07"
+# Model names used by the drafting and summariser helpers.
+# These default values are the documented models but can be overridden
+# using environment variables to allow safe testing or per-environment
+# model selection without editing source. See `requirements.txt` for the
+# pinned `openai` client version the code was developed with.
+_DRAFTING_MODEL = os.getenv("ATLAS_DRAFTING_MODEL", "gpt-5-mini-2025-08-07")
+_SUMMARISER_MODEL = os.getenv("ATLAS_SUMMARISER_MODEL", "gpt-5-nano-2025-08-07")
 
 ADAM_GLOBAL_STYLE = """
 You are ATLAS, a drafting assistant for Adam Phillips, an AI consultant.
@@ -744,11 +749,19 @@ def _invoke_model(
     model: Optional[str] = None,
     system_message: Optional[str] = None,
 ) -> str:
-    """Call the OpenAI client, preferring the Responses API with a chat fallback."""
+    """Call the OpenAI client, preferring the Responses API with a chat fallback.
+
+    This function attempts to normalise several response shapes returned by
+    different `openai` SDK versions. It prefers the Responses API, then
+    falls back to chat completions. The goal is to return a single text
+    blob suitable for rendering into drafts while logging unexpected
+    shapes for easier debugging.
+    """
     target_model = model or _DRAFTING_MODEL
     system_prompt = system_message or _DEFAULT_SYSTEM_MESSAGE
     client = _get_client()
 
+    # Prefer Responses API when available
     if hasattr(client, "responses"):
         response = client.responses.create(
             model=target_model,
@@ -757,8 +770,56 @@ def _invoke_model(
                 {"role": "user", "content": prompt},
             ],
         )
-        return getattr(response, "output_text", "").strip()
 
+        # Frequently available convenience property
+        out_text = getattr(response, "output_text", None)
+        if out_text:
+            return str(out_text).strip()
+
+        # Try structured `output` payloads
+        raw = None
+        try:
+            raw = getattr(response, "output", None)
+        except Exception:
+            raw = None
+
+        if raw:
+            try:
+                # If it's a list, try to extract text pieces
+                if isinstance(raw, (list, tuple)):
+                    pieces = []
+                    for item in raw:
+                        if isinstance(item, dict):
+                            # nested content lists are common
+                            content = item.get("content") or item.get("text")
+                            if isinstance(content, list):
+                                for c in content:
+                                    if isinstance(c, dict) and c.get("type") == "output_text":
+                                        pieces.append(c.get("text", ""))
+                                    elif isinstance(c, str):
+                                        pieces.append(c)
+                            elif isinstance(content, str):
+                                pieces.append(content)
+                        elif isinstance(item, str):
+                            pieces.append(item)
+                    if pieces:
+                        return "\n".join(p.strip() for p in pieces if p).strip()
+
+                # If it's a dict, look for the first string value
+                if isinstance(raw, dict):
+                    for v in raw.values():
+                        if isinstance(v, str) and v.strip():
+                            return v.strip()
+            except Exception:
+                logger.debug("Unexpected Responses API output shape", exc_info=True)
+
+        # Fallback: stringify the whole response
+        try:
+            return str(response).strip()
+        except Exception:
+            return ""
+
+    # Chat completions fallback (older client shapes)
     if hasattr(client, "chat") and hasattr(client.chat, "completions"):
         completion = client.chat.completions.create(
             model=target_model,
@@ -767,7 +828,19 @@ def _invoke_model(
                 {"role": "user", "content": prompt},
             ],
         )
-        return completion.choices[0].message.content.strip()
+
+        # Try a couple of known shapes, otherwise stringify
+        try:
+            return completion.choices[0].message.content.strip()
+        except Exception:
+            try:
+                return completion.choices[0]["message"]["content"].strip()
+            except Exception:
+                logger.debug("Unexpected chat completion shape", exc_info=True)
+                try:
+                    return str(completion).strip()
+                except Exception:
+                    return ""
 
     raise RuntimeError(
         "Installed OpenAI SDK does not support Responses or ChatCompletion APIs required for drafting."
