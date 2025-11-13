@@ -9,18 +9,38 @@ import sys
 import time
 
 import psycopg2
+from sqlalchemy.engine import make_url
 
 
 def main(timeout: int = 30) -> int:
     deadline = time.time() + timeout
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
+    url_value = os.environ.get("DATABASE_URL")
+    if not url_value:
         print("DATABASE_URL is not set", file=sys.stderr)
         return 1
 
+    try:
+        url = make_url(url_value)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"Invalid DATABASE_URL: {exc}", file=sys.stderr)
+        return 1
+
+    if not url.drivername.startswith("postgresql"):
+        print("wait_for_db only supports PostgreSQL URLs.", file=sys.stderr)
+        return 1
+
+    connect_kwargs = {
+        "dbname": url.database,
+        "user": url.username,
+        "password": url.password,
+        "host": url.host or "localhost",
+        "port": url.port or 5432,
+    }
+    connect_kwargs = {k: v for k, v in connect_kwargs.items() if v}
+
     while True:
         try:
-            conn = psycopg2.connect(dsn)
+            conn = psycopg2.connect(**connect_kwargs)
             conn.close()
             print("Database is ready")
             return 0
