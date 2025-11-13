@@ -47,10 +47,10 @@ jobs:
           yamllint .github/workflows/ci.yml || true
 
       - name: Verify model names in docs
-        run: python -m .scripts.verify_models
+        run: python -m scripts.verify_models
 
       - name: Wait for database
-        run: python -m .scripts/wait_for_db
+        run: python -m scripts/wait_for_db
 
       - name: Run migrations
         run: alembic upgrade head
