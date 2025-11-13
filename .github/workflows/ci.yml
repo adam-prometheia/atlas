@@ -48,10 +48,10 @@ jobs:
 
       - name: Verify model names in docs
         run: |
-          python -m scripts/verify_models.py
+          python -m scripts/verify_models
 
       - name: Wait for database
-        run: python -m scripts/wait_for_db.py
+        run: python -m scripts/wait_for_db
 
       - name: Run migrations
         run: alembic upgrade head
