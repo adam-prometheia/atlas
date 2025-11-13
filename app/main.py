@@ -10,9 +10,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
+from pydantic import ValidationError
 
 from . import llm, models, schemas
 from .database import get_db
+from .services import contacts as contact_service
 
 
 app = FastAPI(title="ATLAS - AI Toolkit for Lead Activation & Stewardship")
@@ -311,38 +313,34 @@ def create_contact(
     status: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    contact = models.Contact(
-        name=name,
-        company_name=company_name,
-        role=role,
-        email=email,
-        linkedin_url=linkedin_url,
-        website_url=website_url,
-        source=source,
-        status=status,
-    )
-    db.add(contact)
+    form_data = {
+        "name": name,
+        "company_name": company_name,
+        "role": role,
+        "email": email,
+        "linkedin_url": linkedin_url,
+        "website_url": website_url,
+        "source": source,
+        "status": status,
+    }
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        errors = ["A contact with that email already exists."]
-        form_data = {
-            "name": name,
-            "company_name": company_name,
-            "role": role,
-            "email": email,
-            "linkedin_url": linkedin_url,
-            "website_url": website_url,
-            "source": source,
-            "status": status,
-        }
+        contact_in = schemas.ContactCreate(**form_data)
+    except ValidationError as exc:
+        errors = [err["msg"] for err in exc.errors()]
         return templates.TemplateResponse(
             "contact_form.html",
             _contact_form_context(request, errors=errors, form_data=form_data),
         )
 
-    db.refresh(contact)
+    try:
+        contact = contact_service.create_contact(db, contact_in)
+    except contact_service.ContactAlreadyExistsError:
+        errors = ["A contact with that email already exists."]
+        return templates.TemplateResponse(
+            "contact_form.html",
+            _contact_form_context(request, errors=errors, form_data=form_data),
+        )
+
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact.id),
         status_code=303,
