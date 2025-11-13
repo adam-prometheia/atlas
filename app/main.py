@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from . import llm, models, schemas
 from .database import get_db
 from .services import contacts as contact_service
+from .services import interactions as interaction_service
 
 
 app = FastAPI(title="ATLAS - AI Toolkit for Lead Activation & Stewardship")
@@ -370,38 +371,39 @@ def update_contact(
     status: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    contact = _ensure_contact_exists(contact_id, db)
-    contact.name = name
-    contact.company_name = company_name
-    contact.role = role
-    contact.email = email
-    contact.linkedin_url = linkedin_url
-    contact.website_url = website_url
-    contact.source = source
-    contact.status = status
+    form_data = {
+        "name": name,
+        "company_name": company_name,
+        "role": role,
+        "email": email,
+        "linkedin_url": linkedin_url,
+        "website_url": website_url,
+        "source": source,
+        "status": status,
+    }
 
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
+        contact_in = schemas.ContactUpdate(**form_data)
+    except ValidationError as exc:
         contact = _ensure_contact_exists(contact_id, db)
-        errors = ["A contact with that email already exists."]
-        form_data = {
-            "name": name,
-            "company_name": company_name,
-            "role": role,
-            "email": email,
-            "linkedin_url": linkedin_url,
-            "website_url": website_url,
-            "source": source,
-            "status": status,
-        }
+        errors = [err["msg"] for err in exc.errors()]
         return templates.TemplateResponse(
             "contact_edit_form.html",
             _contact_form_context(request, errors=errors, form_data=form_data, contact=contact),
         )
 
-    db.refresh(contact)
+    contact = _ensure_contact_exists(contact_id, db)
+
+    try:
+        contact_service.update_contact(db, contact, contact_in)
+    except contact_service.ContactAlreadyExistsError:
+        contact = _ensure_contact_exists(contact_id, db)
+        errors = ["A contact with that email already exists."]
+        return templates.TemplateResponse(
+            "contact_edit_form.html",
+            _contact_form_context(request, errors=errors, form_data=form_data, contact=contact),
+        )
+
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact.id),
         status_code=303,
@@ -470,17 +472,25 @@ def create_interaction(
             _interaction_form_context(request, contact=contact, errors=errors, form_data=form_data),
         )
 
-    interaction = models.Interaction(
-        contact_id=contact.id,
-        type=interaction_type,
-        summary=summary,
-        next_action=next_action,
-        next_action_due=parsed_due,
-        outcome=outcome,
-        outcome_notes=outcome_notes,
-    )
-    db.add(interaction)
-    db.commit()
+    interaction_data = {
+        "type": interaction_type,
+        "summary": summary,
+        "next_action": next_action,
+        "next_action_due": parsed_due,
+        "outcome": outcome,
+        "outcome_notes": outcome_notes,
+    }
+
+    try:
+        interaction_in = schemas.InteractionCreate(**interaction_data)
+    except ValidationError as exc:
+        errors = [err["msg"] for err in exc.errors()]
+        return templates.TemplateResponse(
+            "interaction_form.html",
+            _interaction_form_context(request, contact=contact, errors=errors, form_data=form_data),
+        )
+
+    interaction = interaction_service.create_interaction(db, contact, interaction_in)
     _maybe_extract_fact(
         db,
         contact=contact,
@@ -567,14 +577,35 @@ def update_interaction(
         )
         return templates.TemplateResponse("interaction_form.html", context)
 
-    interaction.type = interaction_type
-    interaction.summary = summary
-    interaction.next_action = next_action
-    interaction.next_action_due = parsed_due
-    interaction.outcome = outcome
-    interaction.outcome_notes = outcome_notes
+    interaction_data = {
+        "type": interaction_type,
+        "summary": summary,
+        "next_action": next_action,
+        "next_action_due": parsed_due,
+        "outcome": outcome,
+        "outcome_notes": outcome_notes,
+    }
 
-    db.commit()
+    try:
+        interaction_in = schemas.InteractionUpdate(**interaction_data)
+    except ValidationError as exc:
+        errors = [err["msg"] for err in exc.errors()]
+        context = _interaction_form_context(
+            request,
+            contact=contact,
+            errors=errors,
+            form_data=form_data,
+        )
+        context.update(
+            {
+                "form_action": f"/interactions/{interaction.id}/edit",
+                "submit_label": "Update Interaction",
+                "heading": f"Edit Interaction for {contact.name}",
+            }
+        )
+        return templates.TemplateResponse("interaction_form.html", context)
+
+    interaction = interaction_service.update_interaction(db, interaction, interaction_in)
     _maybe_extract_fact(
         db,
         contact=contact,
@@ -600,8 +631,7 @@ def delete_interaction(interaction_id: int, request: Request, db: Session = Depe
     if not interaction:
         raise HTTPException(status_code=404, detail="Interaction not found")
     contact_id = interaction.contact_id
-    db.delete(interaction)
-    db.commit()
+    interaction_service.delete_interaction(db, interaction)
     return RedirectResponse(
         url=request.url_for("get_contact_detail", contact_id=contact_id),
         status_code=303,

@@ -507,7 +507,7 @@ Instructions:
             },
         )
 
-    payload = payload_model.model_dump()
+    payload: Dict[str, Any] = payload_model.model_dump()
     if parsed is None:
         payload["raw_text"] = excerpt
     return payload
@@ -759,11 +759,11 @@ def _invoke_model(
     """
     target_model = model or _DRAFTING_MODEL
     system_prompt = system_message or _DEFAULT_SYSTEM_MESSAGE
-    client = _get_client()
+    client: Any = _get_client()
 
     # Prefer Responses API when available
     if hasattr(client, "responses"):
-        response = client.responses.create(
+        response: Any = client.responses.create(
             model=target_model,
             input=[
                 {"role": "system", "content": system_prompt},
@@ -821,7 +821,7 @@ def _invoke_model(
 
     # Chat completions fallback (older client shapes)
     if hasattr(client, "chat") and hasattr(client.chat, "completions"):
-        completion = client.chat.completions.create(
+        completion: Any = client.chat.completions.create(
             model=target_model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -831,10 +831,18 @@ def _invoke_model(
 
         # Try a couple of known shapes, otherwise stringify
         try:
-            return completion.choices[0].message.content.strip()
+            choice = completion.choices[0]
+            message = getattr(choice, "message", None)
+            content = getattr(message, "content", None) if message else None
+            if isinstance(content, str):
+                return content.strip()
+            if isinstance(choice, dict):
+                maybe_content = choice.get("message", {}).get("content")
+                if isinstance(maybe_content, str):
+                    return maybe_content.strip()
         except Exception:
             try:
-                return completion.choices[0]["message"]["content"].strip()
+                return str(completion).strip()
             except Exception:
                 logger.debug("Unexpected chat completion shape", exc_info=True)
                 try:

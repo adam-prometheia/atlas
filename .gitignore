@@ -14,5 +14,6 @@ build/
 # Local caches and editor metadata
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 .coverage
 .DS_Store

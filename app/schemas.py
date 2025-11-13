@@ -17,6 +17,10 @@ class InteractionCreate(InteractionBase):
     timestamp: Optional[datetime] = None
 
 
+class InteractionUpdate(InteractionBase):
+    pass
+
+
 class InteractionRead(InteractionBase):
     id: int
     contact_id: int
@@ -52,6 +56,10 @@ class ContactBase(BaseModel):
 
 
 class ContactCreate(ContactBase):
+    pass
+
+
+class ContactUpdate(ContactBase):
     pass
 
 

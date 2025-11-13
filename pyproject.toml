@@ -1,0 +1,15 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+files = ["app/services", "app/repositories", "scripts"]
+[[tool.mypy.overrides]]
+module = "app.models"
+ignore_errors = true

@@ -127,6 +127,16 @@ uvicorn app.main:app --reload
 
 Point `DATABASE_URL` to your local Postgres (or an SQLite file) before launching `uvicorn`.
 
+### Quality checks
+
+Run these commands locally (the CI workflow mirrors them):
+
+- `python -m scripts.verify_models` – ensures the documented model names match `app/llm.py`.
+- `python -m scripts.wait_for_db` – blocks until `DATABASE_URL` is reachable (used in CI).
+- `ruff check .` – lightweight lint pass (syntax/name errors).
+- `mypy` – static type check focused on the layered business logic (configured via `pyproject.toml`).
+- `python -m pytest` – executes the service and API tests using the SQLite fixtures.
+
 ### Database migrations
 
 ATLAS now relies on Alembic for schema changes—`Base.metadata.create_all()` is no longer invoked at startup.
